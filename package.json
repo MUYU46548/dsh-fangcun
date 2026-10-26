@@ -1,0 +1,30 @@
+{
+  "name": "fangcun-dsh",
+  "version": "0.1.0",
+  "description": "方寸 × DSH 插件：在 DSH 里看方寸待办、把本会话用量报回方寸账本（只走方寸的对外接口，不 import 方寸代码）",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "fangcun",
+    "tegula"
+  ],
+  "type": "module",
+  "main": "lib/index.js",
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MUYU46548/fangcun-dsh.git"
+  },
+  "homepage": "https://github.com/MUYU46548/fangcun-dsh#readme",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "license": "MIT"
+}

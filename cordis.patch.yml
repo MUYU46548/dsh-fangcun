@@ -1,0 +1,21 @@
+# ============================================================================
+# fangcun-dsh —— DSH bundle patch（插件的"挂载声明"）
+#
+# DSH 启动时按 bundle 层栈叠加各插件的 patch，本文件把方寸插件插进 profile 的配置树。
+#
+# 安装：
+#   dsh plugin --profile web add fangcun-dsh            # npm 已发布版（推荐，能跟随版本更新）
+#   dsh plugin --profile web add github:MUYU46548/fangcun-dsh
+#   dsh plugin --profile web add link:<本目录绝对路径>   # 本地开发
+#
+# ⚠ 装完要重启 `dsh web`（桌面端要含托盘完全退出再开）。
+# ⚠ npm 名与 github: 是同一个包名，两个来源**别混装**；切换前先
+#   `dsh plugin --profile web remove fangcun-dsh`。
+#
+# ⚠ 这个文件的形状是照 DSH 现有插件的实际写法来的（id + name = 包名），
+#   不是猜的；改了包名这里要同步改，否则宿主找不到模块。
+# ============================================================================
+
+- insert:
+    - id: fangcun-dsh
+      name: fangcun-dsh
