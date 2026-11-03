@@ -2,8 +2,8 @@
 
 把 [方寸（tegula）](https://github.com/MUYU46548/fangcun) 任务看板接进 DSH：在 DSH 里看方寸待办，把本会话的 token 用量报回方寸账本。
 
-> **现状 v0.2.0：用量上报已可用。** 每轮会话结束把 token 报回方寸账本（方寸没开也不丢、不重记）；
-> 「待办挂件」还没写 —— 见 [路线](#路线)。装上去打开 health 就能看到它自己承认的待办清单（`todo` 字段）。
+> **现状 v0.2.0：用量上报 + 待办挂件都已实现，但还没在真 DSH 上跑过一轮。**
+> 装上去打开 health 就能看到它自己承认的待办清单（`todo` 字段）—— 里面写着"哪些还没真机验证"。
 
 **零依赖**：只用 Node 内置模块。不 import 方寸代码、不 import electron —— 这是两个仓互不锁死的前提。
 
@@ -48,7 +48,7 @@ dsh plugin --profile desktop add link:C:\path\to\dsh-fangcun
     "mcpPipe": "\\\\.\\pipe\\tegula-mcp"
   },
   "usage": { "outboxPending": 0 },
-  "todo": ["待办速览挂件（webserver/index-inject + 只读路由，v0.2.0）"]
+  "todo": ["桌面端真机验证：session/event 是否真收到、index-inject 行是否真进页面"]
 }
 ```
 
@@ -73,6 +73,13 @@ dsh plugin --profile desktop add link:C:\path\to\dsh-fangcun
 
 `health.usage.outboxPending` 是当前积压条数 —— 它长期为 0 才说明真的报上去了。
 
+## 待办挂件（v0.2.0）
+
+- **注入**：`webserver/index-inject` 推**一行内联 script**（绝不用 `script-src` —— 那个加载失败会让整个应用起不来），由它去加载 `/fangcun/widget.js` 并吞掉 `onerror`；
+- **数据**：`/fangcun/api/tasks` 经方寸 MCP `list_tasks` 取，**只读**、10 秒缓存、**只给本机**（非回环 403）；
+- **口径**：`完成 / 驳回` 不算未完成；**空状态算未完成**（没填 ≠ 做完）；
+- **界面**：右下角一个角标「方寸 · N」，点开设面板列标题，60 秒刷新一次。
+
 ## 三条边界（越界即错）
 
 1. **不 import 方寸的代码，也不 import electron。** 只走方寸的对外接口：命名管道 MCP（`\\.\pipe\tegula-mcp`）、`tegula` CLI、数据目录里的文件。测试里钉着，加一行 import 就红。
@@ -93,7 +100,8 @@ dsh plugin --profile desktop add link:C:\path\to\dsh-fangcun
 
 - **v0.1.0** ✅ 能装、能自报状态、CI 发版
 - **v0.2.0** ✅ 用量上报：`session/event` 聚合每轮 token → 命名管道 MCP `usage_report`；本地 outbox + 幂等键
-- **v0.2.x** 待办挂件：`webserver/index-inject` 推内联 script + 只读路由取 `list_tasks`
+- **v0.2.0** ✅ 待办挂件：`webserver/index-inject` 内联 script + 只读路由 `list_tasks`
+- **下一步** 真 DSH 跑一轮 → 打 tag 发 0.2.0
 - **以后** npm 发布（需账号），与 Release 版本同源
 
 ## 开发
