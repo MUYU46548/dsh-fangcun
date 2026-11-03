@@ -111,7 +111,7 @@ npm test        # 契约测试（node --test）
 npm pack        # 看发布包里到底装了什么
 ```
 
-交接细节（已核实的 DSH 宿主形态、坑、验收判据）在 [HANDOFF.md](HANDOFF.md)。
+交接细节（已核实的 DSH 宿主形态、坑、验收判据）在 [HANDOFF.md](HANDOFF.md)；下一轮的施工单在 [PLAN.md](PLAN.md)。
 
 ## License
 
