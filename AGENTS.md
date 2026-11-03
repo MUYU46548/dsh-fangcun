@@ -114,7 +114,10 @@ CI 会：校验 tag 与 `package.json.version` 一致 → `npm test` → `npm pa
 - tag 与版本不一致是最常见的翻车点：更新器会认为"没更新"；
 - 发完要**复核资产**，不许只看"工作流是绿的"：
   `gh release view v<version> --json tagName,isDraft,assets`；
-- npm 那一步用 `NPM_TOKEN` 门控，没有账号时自动跳过（代码不用改）。
+- **分发只走 GitHub Release**（`.tgz` + `SHA256SUMS.txt`）。npm 不做了 ——
+  账号注册这条路走不通，代价与收益不成比例（契约 REV-004）。
+  CI 里那步 npm 用 `NPM_TOKEN` 门控，没有 secret 就自动跳过，**不要**去补这个 secret。
+  README 里的安装地址必须是 Release 的 `.tgz`，不要写成 `包名@版本`（那需要 npm）。
 
 ## 7. 维护检查表
 
