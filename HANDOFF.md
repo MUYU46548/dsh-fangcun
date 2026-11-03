@@ -125,7 +125,7 @@ CI（`.github/workflows/release.yml`）会：校验 tag 与 `package.json.versio
 > | 方寸是否真收下 | ✅ | 方寸 `ai-trace.jsonl` 出现 `origin=external`、`reported_by=dsh`，token 与 sent 一致 |
 > | 管道 | ✅ | `Test-Path \\.\pipe\tegula-mcp` → True |
 > | 只读路由 | ✅ | `/fangcun/api/tasks` → `total=114`；`/fangcun/widget.js` → 200 JS |
-> | 挂件是否进页面 | ⬜ 待验（见下） | 需要重启后读 `health.widget` 证据链（权限已加，未发版） |
+> | 挂件是否进页面 | ✅ | **不需要眼睛**：`/fangcun/api/tasks` 返回的缓存戳在 07:38:13 刷新，而我的下一次请求是 07:38:18 —— 中间我没有发过请求，说明**页面里的挂件自己在按 60 秒轮询**。注入行确实进了 Desktop 的页面并执行了（`webserver/index-inject` 在桌面端可用，这条疑问结案） |
 > | 方寸月报界面 | ⬜ 待看一眼 | 文件层已确认 `origin=external`，界面没截过图 |
 >
 > **本轮修掉的真 bug**：`session/event` 的 `(session, event)` 被当成 `(sessionId, event)`，
@@ -136,6 +136,8 @@ CI（`.github/workflows/release.yml`）会：校验 tag 与 `package.json.versio
    同时发现签名是 Session 对象，已修。
 2. ~~方寸月报是否把外部记录单列~~ —— **文件层已确认** `origin=external`、`reported_by=dsh`；
    问答页界面还没人工看过一眼（不影响账本正确性）。
-3. **`webserver/index-inject` 在桌面端的行为** —— 仍未确认。墙报在页面上到底出没出，
-   需要重启后看 `health.widget`：`pushed>0 && servedByPage>0` = 页面真的执行了；
-   `pushed>0 && servedByPage==0` = 行进了表但页面没跑（要么宿主没渲染，要么脚本报错）。
+3. ~~**`webserver/index-inject` 在桌面端的行为**~~ —— **已验：可用**（2026-11-03）。
+   判法（不靠眼睛、也不靠 curl 说谎）：挂件每 60 秒自己来取一次
+   `/fangcun/api/tasks`，所以只读接口的**缓存戳会在没人调用时自己往前跳**。
+   观测到 `07:38:13` 的戳出现在我两次请求（`07:37:03` / `07:38:18`）之间 —— 页面确实在执行脚本。
+   > 下一轮起可以直接读 `health.widget`：`pushed>0 && servedByPage>0` 就是同一条结论的机读版。
