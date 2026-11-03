@@ -47,10 +47,21 @@ jobs:
           set -eu
           tgz="$(ls dsh-fangcun-*.tgz)"
           tar -tzf "$tgz" > /tmp/list.txt
-          for f in package/package.json package/lib/index.js package/cordis.patch.yml package/README.md package/LICENSE; do
+          for f in package/package.json package/lib/index.js package/cordis.patch.yml package/README.md package/LICENSE \
+                   package/lib/usage.js package/lib/widget.js package/lib/mcp-pipe.js package/icon.svg \
+                   package/locale/en.json package/locale/zh.json; do
             grep -qx "$f" /tmp/list.txt || { echo "::error::发布包缺 $f"; exit 1; }
           done
           cat /tmp/list.txt
+
+      # 上面验的是"文件在不在"，这一步验"解出来跑不跑得起来"——
+      # 用户装的是 tgz，不是工作区源码，两者差一层打包。
+      - name: 发布包冒烟（解包后真的 apply 一次）
+        run: |
+          set -eu
+          rm -rf /tmp/pkg && mkdir -p /tmp/pkg
+          tar -xzf dsh-fangcun-*.tgz -C /tmp/pkg
+          node test/smoke-packed.mjs /tmp/pkg/package
 
       - name: 生成校验和
         run: |
