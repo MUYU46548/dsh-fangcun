@@ -178,3 +178,95 @@ test('⑦ 接线：宿主派发 Session 对象 → outbox 的 key 是真 id（�
     fs.rmSync(home, { recursive: true, force: true })
   }
 })
+
+/**
+ * ⑧ 提示词与自证的接线：`apply()` 拿到 `systemPrompt` 就注册规则段 + 一行现状，
+ * 并且 `tool/call` 里的方寸工具会落进 `tools.jsonl`。
+ *
+ * 为什么要在 apply 层面测：这两块都在"装了但没生效"的盲区里 ——
+ * 单测过了、注册没发生，真机只能靠 health 才看得出来。
+ */
+test('⑧ apply：注册规则段 + 一行现状，方寸工具调用落自证日志', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-fangcun-prompt-'))
+  const prevHome = process.env.DSH_HOME
+  const prevPipe = process.env.FANGCUN_MCP_PIPE
+  process.env.DSH_HOME = home
+  process.env.FANGCUN_MCP_PIPE = `\\\\.\\pipe\\dsh-fangcun-absent-${process.pid}-${Date.now()}`
+  try {
+    const sections = []
+    const contexts = []
+    const listeners = new Map()
+    mod.default.apply({
+      on(name, fn) { listeners.set(name, fn); return () => {} },
+      effect(fn) { fn() },
+      inject(_l, cb) { cb({ webServer: { register: () => () => {} }, effect: (fn) => { fn() } }) },
+      get(name) {
+        if (name !== 'systemPrompt') return undefined
+        return {
+          section(input) { sections.push(input); return () => {} },
+          context(input) { contexts.push(input); return () => {} },
+        }
+      },
+    })
+
+    assert.equal(sections.length, 1, '规则段必须注册')
+    assert.equal(sections[0].name, 'dsh-fangcun:rules')
+    assert.match(sections[0].text, /开工先查/)
+    assert.equal(contexts.length, 1, '一行现状必须注册')
+    assert.equal(contexts[0].name, 'dsh-fangcun:status')
+    assert.equal(typeof contexts[0].text, 'function', '一行现状是动态 provider')
+    assert.equal(typeof contexts[0].text(), 'string', 'provider 必须同步给字符串')
+
+    const hp = mod.collectHealth().prompt
+    assert.equal(hp.rules, true)
+    assert.equal(hp.status, true)
+    assert.equal(hp.error, '')
+    assert.ok(typeof hp.line === 'string')
+
+    // 自证：方寸工具调用 → tools.jsonl 一行；别的工具不留
+    const emit = listeners.get('session/event')
+    const session = { id: 'session-aaaabbbb', header: { id: 'session-aaaabbbb' } }
+    emit(session, { type: 'tool/call', data: { turn: 2, name: 'mcp__fangcun__list_tasks', arguments: '{}' } })
+    emit(session, { type: 'tool/call', data: { turn: 2, name: 'pwsh', arguments: '{}' } })
+
+    const proofFile = path.join(home, 'dsh-fangcun', 'tools.jsonl')
+    const rows = fs.readFileSync(proofFile, 'utf-8').trim().split('\n').map((l) => JSON.parse(l))
+    assert.equal(rows.length, 1, '只该记方寸那一条')
+    assert.equal(rows[0].tool, 'mcp__fangcun__list_tasks')
+    assert.equal(rows[0].session, 'session-aaaabbbb')
+    assert.equal(mod.collectHealth().proof.rows, 1)
+  } finally {
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+    if (prevPipe === undefined) delete process.env.FANGCUN_MCP_PIPE
+    else process.env.FANGCUN_MCP_PIPE = prevPipe
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('⑨ 宿主没有 systemPrompt 服务时：不假装注册，health 如实写原因，其它功能照旧', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-fangcun-noprompt-'))
+  const prevHome = process.env.DSH_HOME
+  const prevPipe = process.env.FANGCUN_MCP_PIPE
+  process.env.DSH_HOME = home
+  process.env.FANGCUN_MCP_PIPE = `\\\\.\\pipe\\dsh-fangcun-absent2-${process.pid}-${Date.now()}`
+  try {
+    const registered = []
+    mod.default.apply({
+      on() { return () => {} },
+      effect(fn) { fn() },
+      inject(_l, cb) { cb({ webServer: { register: (r) => { registered.push(r); return () => {} } }, effect: (fn) => { fn() } }) },
+      get() { return undefined }, // 老宿主：没有 systemPrompt
+    })
+    const hp = mod.collectHealth().prompt
+    assert.equal(hp.rules, false, '没注册就写 false，不许假装成功')
+    assert.match(hp.error, /重试|不可用/)
+    assert.equal(registered.length, mod.ROUTES.length, '提示词拿不到时，路由照旧注册')
+  } finally {
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+    if (prevPipe === undefined) delete process.env.FANGCUN_MCP_PIPE
+    else process.env.FANGCUN_MCP_PIPE = prevPipe
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})

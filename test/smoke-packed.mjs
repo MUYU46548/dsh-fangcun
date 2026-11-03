@@ -49,6 +49,8 @@ const health = JSON.parse(body)
 assert.equal(health.ok, true)
 assert.equal(health.plugin.version, pkg.version)
 assert.ok(health.widget, 'health 必须有 widget 证据链')
+assert.equal(typeof health.prompt?.rules, 'boolean', 'health 要报规则段到底注册上没有')
+assert.equal(typeof health.proof?.rows, 'number', 'health 要报自证日志条数')
 
 // 挂件脚本：发布包里那一份必须能把样式表挂进文档（0.2.0 的"裸奔"就是漏了这一步）
 let widgetJs = ''

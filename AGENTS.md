@@ -10,8 +10,8 @@
 
 ## 0. 一句话
 
-把方寸（tegula）接进 DSH：**每轮把本会话 token 用量报回方寸账本**，**在 DSH 里看得到方寸待办**。
-零依赖、只读、只走方寸的命名管道 MCP —— 不 import 方寸代码、不 import electron。
+把方寸（tegula）接进 DSH：**每轮把本会话 token 用量报回方寸账本**，**让 agent 开工先查、收工回写方寸**，
+**在 DSH 里看得到方寸待办**。零依赖、只读、只走方寸的命名管道 MCP —— 不 import 方寸代码、不 import electron。
 
 ## 1. 硬边界（越界即错，测试里钉着）
 
@@ -49,9 +49,12 @@
 | 11 | 可选服务用 `ctx.get('x')` 读，**绝不能写进 inject**（老宿主没那服务 → 插件永不 apply） | whale 注释 |
 | 12 | `dsh plugin` 只是 pnpm 的转发壳；装/更新都靠版本号 | `dsh plugin --help` 原话 |
 | 13 | 更新器按 `package.json.repository` 找上游 Release / Tag | `dsh-plugin-updates` README |
-| 14 | **右下角是 `dsh-whale-widget` 的**：根节点 `.dshwv-root` 钉在 `right:0;bottom:0`（z-index 9999，`pointer-events:none`），宽高 122px 起 —— 挂件别往那儿放 | 已装插件 `assets/whale-widget.js` 的 CSS 原文；0.2.1 真机截图里挂件正压在鲸鱼脸上 |
+| 14 | **右下角是 `dsh-whale-widget` 的**：根节点 `.dshwv-root` 钉在 `right:0;bottom:0`（z-index 9999，`pointer-events:none`），宽高 122px 起 —— 挂件别往那儿放 | 已装插件 `assets/whale-widget.js` 的 CSS 原文；真机截图里挂件正压在鲸鱼脸上 |
+| 15 | 提示词注册：`ctx.systemPrompt.section({ name, order, text })` 与 `.context({ name, order, text })`；`text` 可以是**同步函数**（装配时调用，**不能 await**）；服务用 `ctx.get('systemPrompt')` 读 | 本机 `cordis_inspect_query` 的 `Service.listService` 原文：`PromptSection` / `PromptContext` 声明 |
+| 16 | `tool/call` 事件数据 = `{ turn, step, callId, name, arguments }`；方寸工具在会话里叫 `mcp__fangcun__<tool>` | `session/event` 的 `SessionEventMap` 声明 + 本会话工具表 |
+| 17 | **桌面端 Electron 的请求不带 `sec-fetch-*`，也不带 `referer`**（挂件脚本那次实测 `servedByPage` 恒为 0）。判"页面真的来取"要靠自己加的标记，别靠头 | 2026-11-03 真机：页面有挂件、health 却是 0 |
 
-## 3. 两条链路（改之前先看懂数据怎么走）
+## 3. 四条链路（改之前先看懂数据怎么走）
 
 **用量上报**：`session/event` → `UsageLedger.onSessionEvent`（按 `(sessionId, turn)` 聚合
 `assistant/message`）→ `turn/end` 结算 → 本地 `outbox.jsonl` → 管道 MCP `usage_report` →
@@ -63,6 +66,15 @@
 不占右下 —— 那一角是 `dsh-whale-widget` 的（事实 14）。
 **拖动**默认上锁（`fc-todo-widget:locked`，只有存过 `'0'` 才是解锁）：解锁后按住圆点拖，
 松手按落点吸到最近的角；位移 <6px 当点击。锁着的理由是圆点主要用来点开面板。
+
+**提示词**：`apply()` 里 `root.get('systemPrompt')`（拿不到就 3 秒后重试一次，仍没有就写进
+`health.prompt.error`；**不写进 inject**，否则老宿主上插件永不 apply）→
+`section()` 放**静态规则段**（`lib/prompt.js`，不掺动态数据，别破坏提示词缓存）+
+`context()` 放**一行现状**（`lib/status.js` 的内存快照，60 秒后台刷新；provider **绝不碰管道**）。
+
+**自证**：同一条 `session/event` 订阅里，`tool/call` 且名字以 `mcp__fangcun__` 开头 →
+追加 `$DSH_HOME/dsh-fangcun/tools.jsonl`（只记时间/会话/轮次/工具名，不记参数；上限 500）。
+契约 ②⑦–⑩ 的判据从这里读，不靠模型自述。
 
 ## 4. 关键不变量 ↔ 测试
 
@@ -84,12 +96,16 @@
 | 拖动**默认上锁**（解锁才拖得动）、手抖 <6px 算点击、拖完吞掉那一下 click | `widget-dom ⑪` |
 | 注入行是内联 script、无 `script-src`、不重复推 | `widget ①` |
 | 只读路由：非本机 403、完成/驳回不算未完成 | `widget ③④` |
+| 规则段含四个触发点 + 「闲聊不查」；注册与撤销成对 | `prompt ①②` |
+| 一行现状：格式对、未完成口径对、读快照不碰管道、方寸没开=未连接、provider 不抛 | `prompt ④⑤⑥⑦③` |
+| 自证只记方寸工具、不记参数、脏 id 不记、有上限 | `prompt ⑧⑨` |
+| apply 真的注册了提示词；没有 `systemPrompt` 服务时不假装成功、其它功能照旧；方寸工具调用落 `tools.jsonl` | `plugin ⑧⑨` |
 | health 只报能自证的事实、不泄凭据 | `plugin ⑤` |
 
 ## 5. 本地怎么跑
 
 ```powershell
-npm test        # 35 条，不需要 DSH、不需要真方寸（真起假管道）
+npm test        # 46 条，不需要 DSH、不需要真方寸（真起假管道）
 npm pack        # 验发布包；CI 会把 tgz 解出来真 apply 一次
 ```
 
@@ -112,8 +128,15 @@ curl.exe http://127.0.0.1:<端口>/fangcun/health.json
   有没有 `#fc-todo-widget-style`：没有 = `css()` 忘了 `appendChild`（0.2.0 的错）；
   有 = 被别的样式或 CSP 挡了。这一格 `health` 看不出来，只能看 DOM；
 - `fangcun.dataDir` 为空串 → 没找到方寸数据根，设 `FANGCUN_DATA_DIR`。
+- `prompt.rules === false` → 规则段没注册：`prompt.error` 会写原因（宿主没有 `systemPrompt`
+  服务 = 老宿主）。这时挂件与记账照常工作，只是模型收不到"要用方寸"的提示。
+- `prompt.line` 一直是「方寸 · 未连接」→ 后台快照刷不到 `list_tasks`（方寸没开 / 管道名不对）；
+  它每 60 秒自己重试，不会卡住模型调用。
+- `proof.rows` 不涨 → 没有任何 `mcp__fangcun__*` 调用（真没调），或者 `session/event` 没收到
+  （那就先看 `usage` 那一栏）。
 
-环境变量：`FANGCUN_DATA_DIR`（数据根）、`FANGCUN_MCP_PIPE`（管道）、`DSH_HOME`（默认 `~/.dsh`）。
+环境变量：`FANGCUN_DATA_DIR`（数据根）、`FANGCUN_MCP_PIPE`（管道）、
+`FANGCUN_PROJECT`（提示词那行只统计某个项目）、`DSH_HOME`（默认 `~/.dsh`）。
 
 ## 6. 发版
 
@@ -145,6 +168,8 @@ CI 会：校验 tag 与 `package.json.version` 一致 → `npm test` → `npm pa
 1. `compaction/summary.usage` 该不该接（事实 10g）—— 缺一次真机压缩的对照。
 2. 方寸月报界面还没人工确认过（文件层已确认 `origin=external`、`reported_by=dsh`）。
 3. 会话压缩/恢复期之外的 turn 语义没再验过（现存结论：不回绕，见事实 10e）。
+4. **0.3.0 的三件事只在单测里绿过**（规则段 / 一行现状 / 自证），真机要重启后按
+   `health.prompt.rules`、上下文里那一行、`tools.jsonl` 三项复核；②⑦–⑩ 的验收也依赖它。
 
 ## 9. 文档地图
 
