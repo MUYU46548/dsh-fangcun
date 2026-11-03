@@ -74,6 +74,34 @@ test('② 挂件脚本：GET 返回 JS，非 GET 405', async () => {
   assert.equal(bad.statusCode, 405)
 })
 
+/**
+ * ②b 真机验收 ② 的证据：health 要能分开"行没进表"和"进了表但页面没跑"。
+ * 这两个故障在真机上长得一模一样（都是"页面没角标"），分诊表里最难分的一格。
+ * 判别方法是请求头：浏览器从页面加载脚本会带 sec-fetch-dest / referer，curl 不会。
+ */
+test('②b health 暴露注入证据链，且 curl 不会被误算成页面加载', () => {
+  const { root, listeners } = fakeRoot()
+  mod.default.apply(root)
+
+  const entry = listeners.find(([name]) => name === 'webserver/index-inject')
+  entry[1]([]) // 宿主来收集一次
+
+  const route = mod.ROUTES.find((r) => r.path === '/fangcun/widget.js')
+  // 探针 / curl：没有 sec-fetch-* 与 referer
+  route.handler({ method: 'GET', headers: {} }, fakeRes())
+  const before = mod.collectHealth().widget
+  assert.ok(before.pushed >= 1, '行必须进过表')
+  assert.equal(before.servedByPage, 0, 'curl 不算页面加载')
+
+  // 真浏览器从页面里加载：带 sec-fetch-dest=script
+  const res = fakeRes()
+  route.handler({ method: 'GET', headers: { 'sec-fetch-dest': 'script', 'sec-fetch-site': 'same-origin' } }, res)
+  assert.equal(res.statusCode, 200)
+  const after = mod.collectHealth().widget
+  assert.equal(after.servedByPage, 1, '带 sec-fetch-dest 的才算页面真的执行了')
+  assert.ok(after.lastServedAt, '要记下最后一次时间')
+})
+
 test('③ 只读接口：非本机来源 403', async () => {
   const route = mod.ROUTES.find((r) => r.path === '/fangcun/api/tasks')
   const res = fakeRes()

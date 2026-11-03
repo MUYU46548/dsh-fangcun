@@ -13,6 +13,19 @@
   数据走只读路由 `/fangcun/api/tasks`（MCP `list_tasks`，10 秒缓存，非本机 403）
 - 测试：新增 `test/usage.test.mjs`（真起假方寸管道）与 `test/widget.test.mjs`（注入行 / 脚本 / 只读接口），
   覆盖"不丢 / 能发 / 不重 / 毒记录不卡队列 / 半轮补结算 / 空状态算未完成"
+- **真机验收修掉两处**（2026-11-03，都是"测试绿、真机不对"的契约错位）：
+
+  - **`session/event` 的第一个参数是 Session 对象，不是字符串**。旧实现 `String(sessionId)`
+    把每个会话都拍成 `"[object Object]"`，幂等键退化成 `[object Object]#<turn>` ——
+    不同会话的同一 turn 互相顶掉，真机表现为**静默漏报**（方寸账本里 note 写着 `session=[object`）。
+    现在 `sessionIdOf()` 归一化（认 `id` / `sessionId` / `header.id`），
+    并**显式拒绝 `"[object Object]"`**；取不出 id 时报一次错并跳过，不编假 id。
+    补测试 ⑥/⑥b：两条不同会话的第 1 轮都必须报出去。
+  - `note` 里的会话短名：`id.slice(0,8)` 对 `session-<uuid>` 只会得到 `session-`
+    （八个字符一点区分度都没有），改成去掉前缀再取 8 位。
+  - `health` 新增 `usage.{lastSentAt,lastError}`（失败要看得见）与
+    `widget.{injected,pushed,servedByPage,lastServedAt}`（真机验收 ② 的证据链：
+    靠 `sec-fetch-dest` / `referer` 区分"页面真的加载了脚本"和"有人 curl 了一下"）。
 
 ## 0.1.0（2026-11-03）
 

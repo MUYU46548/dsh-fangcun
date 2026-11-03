@@ -20,7 +20,10 @@
 | 7 | ⚠ **那张表是宿主启动时收集一次的**：订阅晚于收集，行永远进不去 | whale 注释 `:726-730`（#152/#153 的根因） |
 | 8 | ⚠ **`script-src` 行加载失败会让整个应用起不来**（reject 掉 `__DSH_BOOT_READY__`） | whale 注释 `:709-716` |
 | 9 | 用量钩子：`ctx.on('session/event', (sessionId, event) => …)` | whale `:1128` |
-| 10 | `event.type === 'assistant/message'` 时 `event.data.usage` = `{ inputTokens, cacheReadTokens, outputTokens }`，`event.data.turn` 是轮次，`event.data.message.source.model` 是模型；`turn/end` 是结算点 | whale `:944-989` |
+| 10 | ⚠ **签名是 `ctx.on('session/event', (session, event) => …)`：第一个参数是 Session 对象，不是 id 字符串**。id 在 `session.id`（= `session.header.id`） | ①应用内真实源码：`file-upload` 服务写的是 `ctx.on("session/event", (session, event) => this.observeSessionEvent(session, event))`，`session/disposed` 同形；`acp` 用 `sessions.get(session.header.id)`；`productAnalytics` 用 `session.id`。②反证：v0.2.0 把它当字符串用，真机 `sent.jsonl` 里 key 全是 `[object Object]#<turn>`，方寸账本 note 写着 `session=[object` |
+| 10b | `event.data.usage` = `{ inputTokens, cacheReadTokens, outputTokens }`，`event.data.turn` 是轮次，`event.data.message.source.model` 是模型；`turn/end` 是结算点 | 同 10（whale `:944-989`） |
+| 10c | 还有 `compaction/start`（`event.data.turn === null` 表示手动触发），可用来识别"压缩/恢复"这个 turn 可能回绕的时机 | `productAnalytics` 的 `context_compression` 上报 |
+| 10d | 想收**所有** agent 的会话（含子代理）要传 `{ global: true }`：`ctx.on('session/event', fn, { global: true })` | `history follow` 里的 `disposeEvent` / `disposeCreated` |
 | 11 | 可选服务用 `ctx.get('x')` 读，**绝不能写进 inject**（老宿主没有那个服务，整插件会永远不 apply） | whale 注释 `:1181` |
 | 12 | `dsh plugin` 只是 pnpm 的转发壳；装/更新都靠版本号 | `dsh plugin --help` 原话 |
 | 13 | 更新器按 `package.json.repository` 找上游 Release / Tag | `dsh-plugin-updates` README |
@@ -113,8 +116,26 @@ CI（`.github/workflows/release.yml`）会：校验 tag 与 `package.json.versio
 
 ## 还没验证的（真装一次才知道）
 
-1. **桌面端是否真的收到 `session/event`** —— 代码按 whale 插件的用法写，但没在真宿主上跑过。
-   验证方法：装插件 → 聊两轮 → 看 `$DSH_HOME/dsh-fangcun/{outbox,sent}.jsonl`，
-   sent.jsonl 有行 = 报上去了；outbox 有行 = 方寸没开或管道名不对。
-2. **方寸月报是否把外部记录单列**（工具描述说会，但没实测过界面）。
-3. **`webserver/index-inject` 在桌面端的行为**（做挂件时才需要）。
+> **2026-11-03 首次真机验收结果**（重启后新会话，DSH web 端口 64528）：
+>
+> | 项 | 结果 | 证据 |
+> |---|---|---|
+> | 插件是否真加载 | ✅ | `GET /fangcun/health.json` → 200，`plugin.version=0.2.0` |
+> | `session/event` 是否真派发 | ✅ | `~/.dsh/dsh-fangcun/sent.jsonl` 有 16 行，时间戳与真实对话轮次对得上 |
+> | 方寸是否真收下 | ✅ | 方寸 `ai-trace.jsonl` 出现 `origin=external`、`reported_by=dsh`，token 与 sent 一致 |
+> | 管道 | ✅ | `Test-Path \\.\pipe\tegula-mcp` → True |
+> | 只读路由 | ✅ | `/fangcun/api/tasks` → `total=114`；`/fangcun/widget.js` → 200 JS |
+> | 挂件是否进页面 | ⬜ 待验（见下） | 需要重启后读 `health.widget` 证据链（权限已加，未发版） |
+> | 方寸月报界面 | ⬜ 待看一眼 | 文件层已确认 `origin=external`，界面没截过图 |
+>
+> **本轮修掉的真 bug**：`session/event` 的 `(session, event)` 被当成 `(sessionId, event)`，
+> 于是所有会话共用 `"[object Object]"`、幂等键互相顶掉 → 静默漏报。见 CHANGELOG。
+> 教训：**照别人的用法抄，抄到的是用法不是签名** —— 事实要回到源码逐字看。
+
+1. ~~桌面端是否真的收到 `session/event`~~ —— **已验：收到**（2026-11-03，`sent.jsonl` 有行）。
+   同时发现签名是 Session 对象，已修。
+2. ~~方寸月报是否把外部记录单列~~ —— **文件层已确认** `origin=external`、`reported_by=dsh`；
+   问答页界面还没人工看过一眼（不影响账本正确性）。
+3. **`webserver/index-inject` 在桌面端的行为** —— 仍未确认。墙报在页面上到底出没出，
+   需要重启后看 `health.widget`：`pushed>0 && servedByPage>0` = 页面真的执行了；
+   `pushed>0 && servedByPage==0` = 行进了表但页面没跑（要么宿主没渲染，要么脚本报错）。

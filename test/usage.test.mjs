@@ -166,6 +166,64 @@ test('④ 方寸明确拒绝（ok:false）：丢掉这条并报错，不卡住�
   }
 })
 
+/**
+ * ⑥ 真机契约：宿主派发的是 **Session 对象**，不是字符串。
+ *
+ * 2026-11-03 真机事故：`session/event` 的签名是 `(session, event)`，`session` 是对象，
+ * id 在 `session.id`。旧实现直接 `String(session)` → 所有会话都变成 `"[object Object]"`，
+ * 幂等键退化成 `[object Object]#<turn>`：**不同会话的同一 turn 互相顶掉**，
+ * 表现为"某些轮次静默漏报"（方寸账本里 note 写着 `session=[object`）。
+ *
+ * 这条测试钉住：① 对象形状能取出真 id；② 两个不同会话的同一轮都要报出去。
+ */
+test('⑥ Session 对象形状：取出真 id，且不同会话的同一轮不互相顶掉', () => {
+  const home = tmpHome()
+  try {
+    const ledger = new UsageLedger({ home, pipePath: '' })
+    // 真宿主给的对象：id 与 header.id 都在（见 DSH 源码 session.header.id / session.id）
+    const sessionA = { id: 'session-aaaa1111-2222-3333-4444-555566667777', header: { id: 'session-aaaa1111-2222-3333-4444-555566667777' } }
+    const sessionB = { id: 'session-bbbb1111-2222-3333-4444-555566667777', header: { id: 'session-bbbb1111-2222-3333-4444-555566667777' } }
+
+    feedTurn(ledger, sessionA, 1, [{ input: 100, cache: 0, output: 10 }])
+    feedTurn(ledger, sessionB, 1, [{ input: 200, cache: 0, output: 20 }])
+
+    assert.equal(ledger.pendingCount(), 2, '两个会话的第 1 轮都必须在队列里（旧实现会退化成同一条）')
+
+    const rows = fs.readFileSync(usagePaths(home).outbox, 'utf-8').trim().split('\n').map((l) => JSON.parse(l))
+    const keys = rows.map((r) => r.key).sort()
+    assert.deepEqual(keys, [
+      'session-aaaa1111-2222-3333-4444-555566667777#1',
+      'session-bbbb1111-2222-3333-4444-555566667777#1',
+    ])
+    for (const r of rows) {
+      assert.doesNotMatch(r.key, /\[object Object\]/, '绝不允许把会话对象拍成字符串当 id')
+      assert.doesNotMatch(r.payload.note, /\[object/, 'note 里不能出现 [object Object]')
+    }
+
+    // note 要能区分是哪个会话：不能是 "session=session-"
+    const notes = rows.map((r) => r.payload.note).sort()
+    assert.match(notes[0], /session=aaaa1111/)
+    assert.match(notes[1], /session=bbbb1111/)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('⑥b 取不出 id 时不猜、不污染账本，只报一次错', () => {
+  const home = tmpHome()
+  const errors = []
+  try {
+    const ledger = new UsageLedger({ home, pipePath: '', onError: (m) => errors.push(m) })
+    const noId = { header: {} }
+    feedTurn(ledger, noId, 1, [{ input: 5, cache: 0, output: 5 }])
+    assert.equal(ledger.pendingCount(), 0, '没有 id 就不该落一条假记录')
+    assert.equal(errors.length, 1, '要报错，但只报一次（别每轮刷日志）')
+    assert.match(errors[0], /会话/)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
 test('⑤ 零 token 的轮次不产生记录；会话销毁时结算未结算的半轮', () => {
   const home = tmpHome()
   try {
