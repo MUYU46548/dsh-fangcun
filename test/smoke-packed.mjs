@@ -50,6 +50,13 @@ assert.equal(health.ok, true)
 assert.equal(health.plugin.version, pkg.version)
 assert.ok(health.widget, 'health 必须有 widget 证据链')
 
+// 挂件脚本：发布包里那一份必须能把样式表挂进文档（0.2.0 的"裸奔"就是漏了这一步）
+let widgetJs = ''
+registered.find((r) => r.path === '/fangcun/widget.js')
+  .handler({ method: 'GET', headers: {} }, { statusCode: 0, setHeader() {}, end(s) { widgetJs = String(s) } })
+assert.ok(widgetJs.includes('host.appendChild(s)'), '样式表要真挂进文档，否则挂件以纯文本排在页面末尾')
+assert.ok(widgetJs.includes("root.style.position = 'fixed'"), '根节点要自带内联定位兜底')
+
 // 用量接线：宿主给的是 Session 对象，落地必须是真 id（不是 [object Object]）
 const emit = listeners.get('session/event')
 assert.equal(typeof emit, 'function', '必须订阅 session/event')

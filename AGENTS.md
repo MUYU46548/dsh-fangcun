@@ -74,6 +74,7 @@
 | 子代理照报但标 `subagent=1` | `usage ⑦` |
 | outbox 上限 500，丢最旧 + 报错 | `usage ⑧` |
 | 挂件脚本能跑（真执行，不只是字符串匹配） | `widget-dom ①–⑧` |
+| **挂件只当浮层**：样式表真挂进 `<head>`、根节点内联 `fixed` 定位、折叠态内联 `display:none` | `widget-dom ⑨` |
 | 注入行是内联 script、无 `script-src`、不重复推 | `widget ①` |
 | 只读路由：非本机 403、完成/驳回不算未完成 | `widget ③④` |
 | health 只报能自证的事实、不泄凭据 | `plugin ⑤` |
@@ -81,7 +82,7 @@
 ## 5. 本地怎么跑
 
 ```powershell
-npm test        # 32 条，不需要 DSH、不需要真方寸（真起假管道）
+npm test        # 33 条，不需要 DSH、不需要真方寸（真起假管道）
 npm pack        # 验发布包；CI 会把 tgz 解出来真 apply 一次
 ```
 
@@ -98,6 +99,9 @@ curl.exe http://127.0.0.1:<端口>/fangcun/health.json
 - `usage.outboxPending > 0` → 方寸没开或管道名不对；
 - `usage.lastError` → 最近一次为什么没发出去；
 - `widget.pushed > 0 && widget.servedByPage == 0` → 行进了表但页面没执行；
+- 界面底部出现**一整段纯文本**（「方寸 · N」+ 一堆待办）→ 样式没生效。先看 `<head>` 里
+  有没有 `#fc-todo-widget-style`：没有 = `css()` 忘了 `appendChild`（0.2.0 的错）；
+  有 = 被别的样式或 CSP 挡了。这一格 `health` 看不出来，只能看 DOM；
 - `fangcun.dataDir` 为空串 → 没找到方寸数据根，设 `FANGCUN_DATA_DIR`。
 
 环境变量：`FANGCUN_DATA_DIR`（数据根）、`FANGCUN_MCP_PIPE`（管道）、`DSH_HOME`（默认 `~/.dsh`）。

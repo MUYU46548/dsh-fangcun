@@ -86,6 +86,7 @@ dsh plugin --profile desktop add https://github.com/MUYU46548/dsh-fangcun/releas
 | 圆点上写着「方寸未连接」 | 方寸是否在跑 | 启动方寸；点一下圆点可重试 |
 | 账本里没有记录 | `health.usage` 的 `outboxPending` / `lastError` | 有积压 = 方寸没开或管道名不对；`lastError` 会写明原因 |
 | 看板入口不见了 | 方寸看板启动过没有 | 插件按方寸自己记的端口给链接，没记过就不显示，不会给你一个打不开的地址 |
+| 界面底部出现**一大段纯文本**（「方寸 · N」跟一串待办） | 0.2.0 的样式 bug | 升级到 0.2.1：样式表没挂进页面，挂件退化成正文。修完仍是右下角一个小圆点 |
 
 排查都以 `health.json` 为准 —— 它报的是插件能自证的事实，不猜。
 

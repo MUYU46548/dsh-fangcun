@@ -54,9 +54,11 @@ function makeDom() {
     }
   }
 
+  const head = new Node('head')
   const body = new Node('body')
   const document = {
     readyState: 'complete',
+    head,
     body,
     createElement(tag) { const n = new Node(tag); return n },
     getElementById(id) { return byId.get(id) || null },
@@ -91,7 +93,7 @@ function makeDom() {
     },
     open() {},
   }
-  return { document, window, storage, body, byId }
+  return { document, window, storage, body, head, byId }
 }
 
 /** 在替身环境里跑一次 WIDGET_JS，返回挂载后的根节点与观察到的请求 */
@@ -239,4 +241,36 @@ test('⑧ 脚本只读：不出现写接口，也不 import 方寸代码', () =>
   // 深色主题：不许写死白底
   assert.match(WIDGET_JS, /prefers-color-scheme:\s*dark/, '要有深色主题')
   assert.match(WIDGET_JS, /var\(--fc-bg\)/, '颜色要走变量，别写死')
+})
+
+/**
+ * ⑨ 真机 2026-11-03 的教训：样式表建了但**没挂进文档** ⇒ 一条规则都不生效，
+ * 挂件以纯文本排在页面末尾（用户看到的那"一堆丑丑的字"）。
+ *
+ * 为什么之前 8 条全绿还没抓到：替身 DOM 不做样式计算，"元素在不在文档里"是唯一
+ * 能断言的事实 —— 所以这里直接钉"挂进去了"+"折叠不依赖 CSS"。
+ */
+test('⑨ 样式表真挂进了文档；根节点自带浮层定位；折叠态不依赖 CSS', async () => {
+  const dom = makeDom()
+  const w = runWidget(dom, { reply: TASKS })
+  await w.flush()
+
+  const style = dom.document.getElementById('fc-todo-widget-style')
+  assert.ok(style, 'style 元素必须挂进文档，否则所有规则都不生效')
+  assert.equal(style.parentNode, dom.head, '应当挂在 <head> 里')
+  assert.match(style.textContent, /#fc-todo-widget\{position:fixed/, '浮层定位规则要在')
+  assert.match(style.textContent, /\.fc-panel\{display:none/, '折叠态 CSS 兜底要在')
+
+  const root = w.root()
+  assert.equal(root.style.position, 'fixed', '根节点要自带内联定位：不许排进页面正文')
+  assert.equal(root.style.right, '14px')
+  assert.equal(root.style.bottom, '14px')
+
+  const panel = root.find((n) => n.className === 'fc-panel')[0]
+  assert.ok(panel, '面板要建出来')
+  assert.equal(panel.style.display, 'none', '收起时面板必须内联 hidden，不能靠 CSS')
+
+  root.find((n) => /fc-pill/.test(n.className) && !/fc-mini/.test(n.className))[0].onclick()
+  const opened = w.root().find((n) => n.className === 'fc-panel')[0]
+  assert.equal(opened.style.display, 'block', '展开时面板要显示')
 })
