@@ -84,13 +84,23 @@ Get-Content $env:USERPROFILE\.dsh\dsh-fangcun\outbox.jsonl         # 期望空�
 
 ## 4. P2 · 用量上报的健壮性（P0 暴露的问题 + 已知缺口）
 
-按价值排序，逐条做，每条配测试：
+> **2026-11-03 修订**：下面第 1、2 条原本的写法**前提是错的**（那是想当然，不是读源码得来的）。
+> 已在 `HANDOFF.md` 事实 10f/10e 里订正，条目本身也改了。别再按旧写法做。
 
-1. **子代理会话标记**：`subagent/start|end` 记录 sessionId，上报时 `note` 加 `subagent=1`（鲸鱼插件用法，`HANDOFF.md` 事实 9/10 附近）。判据：主/子会话各一轮，note 可区分。
-2. **压缩/恢复后的 turn 重号**：DSH 压缩或会话恢复可能让 `turn` 从 1 重来 → 现有幂等键会把新轮误判成旧的。修法：键里带会话内的"纪元"（例如第一次见到的 session 起始时间），或改用 `(turn, 首个消息 id)`。**先写一条会红的测试复现，再改。**
-3. **outbox 上限**：超过 N 条（建议 500）时丢最旧并 `onError` 一次，避免无限涨。
-4. **失败可见**：health 增加 `usage: { pending, lastSentAt, lastError }`（现在只有 pending）。
+1. ~~**子代理会话标记**：`subagent/start|end` 记录 sessionId~~ → **宿主没有这两个事件**。
+   判据在 `SessionHeader`：`origin === 'subagent'` / `parentSession` / `delegationDepth > 0`。
+   已做：`isSubagentSession()` + note 加 `subagent=1`；订阅改用 `{ global: true }` 才能收到子代理会话的事件
+   （`EventOptions.global` 只是放宽 context 过滤，不会重复投递）。
+2. ~~**压缩/恢复后的 turn 重号**~~ → **turn 不回绕**：它来自持久投影 `turnBoundary.lastTurn`，
+   `phase.turn + 1` 只是自增；压缩与重启都不动它（HANDOFF 事实 10e）。
+   已做的是**防守而不是修复**：万一真回绕且撞上已发键，`finalize()` 会报错而不是静默丢一轮（测试 ⑨）。
+   不要再"猜一个纪元"塞进键里 —— 那是在给一个不存在的故障加复杂度。
+3. **outbox 上限**：已做，500 条，丢最旧的 + 报错（测试 ⑧）。
+4. **失败可见**：已做，`health.usage = { outboxPending, lastSentAt, lastError }`。
 5. **金额口径**：不动（继续只报 token）；若方寸将来加 `cost_estimated` 字段，走方寸 REV 后再接。
+6. **新发现、未解**：`compaction/summary` 自带 `usage`（压缩那次调用的真实 token），
+   我们没接 —— 见 HANDOFF 事实 10g。**先真机跑出一次压缩、对比两边，再决定接不接**；
+   不确定是否与 `assistant/message` 重复时接了就是多报账，比少报更糟。
 
 ## 5. P3 · 挂件体验（有 P0 的结论再做）
 

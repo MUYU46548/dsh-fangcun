@@ -27,6 +27,21 @@
     `widget.{injected,pushed,servedByPage,lastServedAt}`（真机验收 ② 的证据链：
     靠 `sec-fetch-dest` / `referer` 区分"页面真的加载了脚本"和"有人 curl 了一下"）。
 
+- 用量健壮性（P2）：
+
+  - **子代理会话**：宿主没有 `subagent/start|end` 事件，判据在 `SessionHeader`
+    （`origin === 'subagent'` / `parentSession` / `delegationDepth > 0`）。子代理的 token 照报，
+    `note` 加 `subagent=1` 以便与主会话区分。
+  - 订阅改用 `{ global: true }`（`EventOptions` 原文："regardless of context filter checks"），
+    否则子代理会话的事件收不到；带参调用抛异常时退回两参形式，**绝不两次都注册**（那会每轮记两遍）。
+  - **outbox 上限 500 条**：超了丢最旧的并报错。它每轮整份重写，无上限会把磁盘和 CPU 一起拖死。
+  - **轮次回绕的防守**：`turn` 其实来自持久投影、不会回绕（详见 HANDOFF 事实 10e），
+    但万一回绕且撞上已发键，原本会**静默丢掉一整轮**；现在会报错说明丢的是哪一轮。
+  - `test/usage.test.mjs` 新增 ⑦（子代理标记）、⑧（outbox 上限）、⑨（回绕不静默）；
+    `test/plugin.test.mjs` 新增 ⑦（从 `apply()` 一路验到 outbox 的接线）。
+  - **已知缺口（未接）**：`compaction/summary` 自带 `usage`，压缩消耗的 token 现在没进账；
+    但尚不确定它是否同时体现为 `assistant/message`，**先真机对比再决定**（多报账比少报更糟）。
+
 ## 0.1.0（2026-11-03）
 
 首个版本，只做「能装 + 能自报状态」，不假装功能齐了。

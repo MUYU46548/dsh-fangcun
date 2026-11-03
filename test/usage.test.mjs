@@ -224,6 +224,87 @@ test('⑥b 取不出 id 时不猜、不污染账本，只报一次错', () => {
   }
 })
 
+/**
+ * ⑦ 子代理标记：宿主里**没有** `subagent/start|end` 事件，
+ * 判据在 `SessionHeader`（`origin:'subagent'` / `parentSession` / `delegationDepth`）。
+ * 子代理的 token 是真花的钱，照样要报，但要在 note 里标出来。
+ */
+test('⑦ 子代理会话：照报，但 note 带 subagent=1；主会话不带', () => {
+  const home = tmpHome()
+  try {
+    const ledger = new UsageLedger({ home, pipePath: '' })
+    const main = { id: 'session-main0001', header: { id: 'session-main0001', createdAt: 1 } }
+    const child = {
+      id: 'session-child001',
+      header: { id: 'session-child001', origin: 'subagent', parentSession: 'session-main0001', delegationDepth: 1 },
+    }
+
+    feedTurn(ledger, main, 1, [{ input: 10, cache: 0, output: 2 }])
+    feedTurn(ledger, child, 1, [{ input: 40, cache: 0, output: 8 }])
+
+    assert.equal(ledger.pendingCount(), 2, '子代理的账不能丢')
+    const rows = fs.readFileSync(usagePaths(home).outbox, 'utf-8').trim().split('\n').map((l) => JSON.parse(l))
+    const byKey = Object.fromEntries(rows.map((r) => [r.key, r.payload]))
+    assert.match(byKey['session-main0001#1'].note, /session=main0001/)
+    assert.doesNotMatch(byKey['session-main0001#1'].note, /subagent/)
+    assert.match(byKey['session-child001#1'].note, /subagent=1/)
+    assert.equal(byKey['session-child001#1'].prompt_tokens, 40, '子代理的 token 要原样报，不能因为标记就丢')
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+/**
+ * ⑧ outbox 上限：方寸长期不开时 outbox 会一直涨，而它每轮整份重写。
+ * 超了要丢**最旧**的并吵一声（静默丢账是最坏的结果）。
+ */
+test('⑧ outbox 超上限：丢最旧的、报错、且不超过上限', () => {
+  const home = tmpHome()
+  const errors = []
+  try {
+    const ledger = new UsageLedger({ home, pipePath: '', onError: (m) => errors.push(m) })
+    const session = { id: 'session-cap00001', header: { id: 'session-cap00001' } }
+    for (let turn = 1; turn <= 510; turn++) {
+      feedTurn(ledger, session, turn, [{ input: 1, cache: 0, output: 1 }])
+    }
+    assert.ok(ledger.pendingCount() <= 500, '不能无限涨：' + ledger.pendingCount())
+    const rows = fs.readFileSync(usagePaths(home).outbox, 'utf-8').trim().split('\n').map((l) => JSON.parse(l))
+    assert.ok(rows.length <= 500)
+    assert.equal(rows[rows.length - 1].key, 'session-cap00001#510', '最新的必须留着')
+    assert.ok(!rows.some((r) => r.key === 'session-cap00001#1'), '最旧的应当被丢掉')
+    assert.ok(errors.some((e) => /outbox 超过/.test(e)), '丢数据必须报错：' + JSON.stringify(errors.slice(0, 2)))
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+/**
+ * ⑨ 轮次回绕：正常不会发生（宿主 turn 来自持久投影），但一旦发生，
+ * 撞键会让整轮**静默消失**。这里钉的是"宁可吵，不可静默"。
+ */
+test('⑨ 轮次回绕撞上已发键：不重复报，但必须报错说明丢了一轮', () => {
+  const home = tmpHome()
+  const errors = []
+  try {
+    const ledger = new UsageLedger({ home, pipePath: '', onError: (m) => errors.push(m) })
+    const session = { id: 'session-rewind001', header: { id: 'session-rewind001' } }
+    feedTurn(ledger, session, 3, [{ input: 10, cache: 0, output: 1 }])
+    assert.equal(ledger.pendingCount(), 1)
+
+    // 模拟"已发过第 1 轮"，然后轮次回绕到 1
+    ledger.sent.add('session-rewind001#1')
+    feedTurn(ledger, session, 1, [{ input: 99, cache: 0, output: 9 }])
+    assert.equal(ledger.pendingCount(), 1, '撞键的这轮不能重复入队（否则就是多报账）')
+    assert.ok(errors.some((e) => /回绕/.test(e)), '丢了必须吵：' + JSON.stringify(errors))
+
+    // 未撞键的回绕（该轮次从没发过）应当正常上报，不能被误杀
+    feedTurn(ledger, session, 2, [{ input: 7, cache: 0, output: 3 }])
+    assert.equal(ledger.pendingCount(), 2, '没撞键的回绕不该丢')
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
 test('⑤ 零 token 的轮次不产生记录；会话销毁时结算未结算的半轮', () => {
   const home = tmpHome()
   try {

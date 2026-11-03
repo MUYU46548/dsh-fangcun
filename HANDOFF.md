@@ -23,7 +23,10 @@
 | 10 | ⚠ **签名是 `ctx.on('session/event', (session, event) => …)`：第一个参数是 Session 对象，不是 id 字符串**。id 在 `session.id`（= `session.header.id`） | ①应用内真实源码：`file-upload` 服务写的是 `ctx.on("session/event", (session, event) => this.observeSessionEvent(session, event))`，`session/disposed` 同形；`acp` 用 `sessions.get(session.header.id)`；`productAnalytics` 用 `session.id`。②反证：v0.2.0 把它当字符串用，真机 `sent.jsonl` 里 key 全是 `[object Object]#<turn>`，方寸账本 note 写着 `session=[object` |
 | 10b | `event.data.usage` = `{ inputTokens, cacheReadTokens, outputTokens }`，`event.data.turn` 是轮次，`event.data.message.source.model` 是模型；`turn/end` 是结算点 | 同 10（whale `:944-989`） |
 | 10c | 还有 `compaction/start`（`event.data.turn === null` 表示手动触发），可用来识别"压缩/恢复"这个 turn 可能回绕的时机 | `productAnalytics` 的 `context_compression` 上报 |
-| 10d | 想收**所有** agent 的会话（含子代理）要传 `{ global: true }`：`ctx.on('session/event', fn, { global: true })` | `history follow` 里的 `disposeEvent` / `disposeCreated` |
+| 10d | 想收**所有** agent 的会话（含子代理）要传 `{ global: true }`：`ctx.on('session/event', fn, { global: true })`。`EventOptions.global` 原文是 "Receive the event regardless of context filter checks" —— 只是**放宽过滤**，不会重复投递 | `history follow` 里的 `disposeEvent` / `disposeCreated`；`Context.on` 的类型声明 |
+| 10e | **`turn` 不会回绕**：它是 `const turn = phase.turn + 1`，而 `phase.turn` 在构造时由持久投影恢复 —— `const lastTurn = sessionProjections.stateOf(session, 'turnBoundary')?.lastTurn ?? 0`。压缩不动它，重启也不动它。**只有投影彻底缺失时才会从 0 开始**，而那基本等于新会话（新 sessionId） | `AgentLoop` 构造函数；`turnBoundary` 投影的 `apply`（`case 'turn/start': {...lastTurn: event.data.turn}`） |
+| 10f | **宿主里没有 `subagent/start` / `subagent/end` 事件**。判子代理看 `SessionHeader`：`origin?: 'subagent'` / `parentSession?: SessionId` / `delegationDepth?: number`。事件表里只有 `subagent/descriptor` 与 `subagent/catalog` | 宿主 `SessionHeader` 类型声明原文；`SessionEventMap` 全表 |
+| 10g | ⚠ **未解**：`compaction/summary` 自带 `usage?: TokenUsage`（压缩那次 LLM 调用的真实用量），我们现在**只收 `assistant/message`**，所以压缩花的 token 没进账。**但还不确定**它是否同时也体现为一条 `assistant/message` —— 生产端是用 spread 拼的对象，静态追不到。要判定只需真机跑出一次压缩，对比两边；**在那之前不要接**（接错就是多报账，比少报更糟） | `compaction/summary` 的类型声明；`compaction/start`/`end` 也带 `turn`（手动压缩时 `turn: null`） |
 | 11 | 可选服务用 `ctx.get('x')` 读，**绝不能写进 inject**（老宿主没有那个服务，整插件会永远不 apply） | whale 注释 `:1181` |
 | 12 | `dsh plugin` 只是 pnpm 的转发壳；装/更新都靠版本号 | `dsh plugin --help` 原话 |
 | 13 | 更新器按 `package.json.repository` 找上游 Release / Tag | `dsh-plugin-updates` README |
@@ -37,6 +40,8 @@
 测试：`test/usage.test.mjs`（真起一个假方寸管道，5 组，13 条断言）。
 
 **输入**：`session/event`（见事实 10）。按 `(sessionId, turn)` 聚合，`turn/end` 结算；会话销毁时补结算半轮。
+**`session` 是对象**（事实 10）—— 取 id 走 `sessionIdOf()`，判子代理走 `isSubagentSession()`（事实 10f），
+两者都认 `header`，测试里钉着。
 
 **输出**：方寸 MCP 工具 `usage_report`（`desktop/src/main/mcp/tools.ts:159`）：
 
@@ -70,8 +75,11 @@ tools/call   → {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":
 
 1. **方寸没开**（管道不存在 / 连接失败）→ 事件进本地 outbox（`$DSH_HOME/dsh-fangcun/outbox.jsonl`），下次启动或下一轮重试；**绝不丢、绝不抛**。
 2. **幂等**：键 = `sessionId + turn`。重复结算（重试、压缩、崩溃恢复）只能记一次。
+   - turn 是持久的（事实 10e），所以这个键成立；但如果真出现回绕，撞键会让整轮**静默消失**，
+     所以 `finalize()` 在"回绕且撞上已发键"时**报错**（`⑨` 测试钉着：宁可吵，不可静默）。
 3. **进程不背锅**：所有 I/O 失败只写 `ctx.logger.warn`，不能让 DSH 主流程感知到插件出错。
-4. **非 GET 之外不暴露写接口**；插件自己不发任何网络请求。
+4. **outbox 有上限**（500 条）：超了丢最旧的并报错 —— 它每轮整份重写，无上限会拖死磁盘。
+5. **非 GET 之外不暴露写接口**；插件自己不发任何网络请求。
 
 **验收**：跑一轮 DSH 会话 → 方寸问答页月报出现 1 笔 `origin=external`，合计 token 与 DSH 侧一致。
 
