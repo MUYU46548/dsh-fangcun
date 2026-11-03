@@ -86,13 +86,18 @@ tools/call   → {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":
 ## ② 待办挂件（v0.2.0 已实现）
 
 代码：`lib/widget.js`（注入行 + 浏览器脚本）、`lib/index.js` 的路由与 `injectRow`。
-测试：`test/widget.test.mjs`（4 组）。
+测试：`test/widget.test.mjs`（4 组，路由与注入行形状）、
+`test/widget-dom.test.mjs`（8 组，替身 DOM **真执行**脚本 —— 改挂件后必须跑这个）。
 
 - `apply()` **最前面**注册 `root.on('webserver/index-inject', …)`（事实 7：晚注册就没了），
   push 一行**内联** `{ kind: 'script', placement: 'body', text: '<我们自己建 <script src=…> 并吞掉 onerror>' }`。
   **绝不用 `script-src`**（事实 8：加载失败会带走整个应用）。
 - 脚本从插件自己的只读路由取数据（`list_tasks`，经同一根管道），**只读**，不改方寸任何数据。
 - 路由套回环校验（非本机 403），10 秒缓存；`完成/驳回` 不算未完成，**空状态算未完成**。
+- 看板地址来自数据根下 `.tegula-port` 的**第一行**（实测 8791；PLAN 里写的 8753 是旧值）。
+  读不到就返回空串，挂件不显示入口。
+- 深色主题走 `prefers-color-scheme`；展开/关闭状态存 `localStorage`；关掉后留小圆点可点回。
+- 点条目只做**只读**动作（复制 id），不写方寸。
 
 **验收**：DSH 界面看得到数字、点开能列标题；跑前跑后方寸 `task-data/` 逐字节不变。
 
