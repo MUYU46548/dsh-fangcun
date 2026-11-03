@@ -92,7 +92,7 @@ dsh plugin --profile desktop add https://github.com/MUYU46548/dsh-fangcun/releas
 ## 交流与支持
 
 - **[提交问题或建议](https://github.com/MUYU46548/dsh-fangcun/issues)**：带上 DSH 与插件版本、`health.json` 内容、复现步骤。
-- **如果喜欢本项目，欢迎到[爱发电](https://afdian.com/a/muyu46548B)支持作者！**
+- **如果喜欢本项目，欢迎到[爱发电](https://afdian.com/a/muyu46548B?utm_source=copylink&utm_medium=link)支持作者！**
 
 ## 文档与开源
 
