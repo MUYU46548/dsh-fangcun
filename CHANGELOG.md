@@ -1,5 +1,16 @@
 # 变更记录
 
+## 0.2.0（2026-11-03）
+
+用量上报可用。
+
+- 订阅 `session/event`：按 `(sessionId, turn)` 聚合 `assistant/message` 的 usage，`turn/end` 结算；会话销毁时补结算半轮
+- 经命名管道 MCP 调方寸 `usage_report`：`prompt_tokens = inputTokens + cacheReadTokens`、`completion_tokens = outputTokens`、**不报金额**（DSH 没有供应商报价，自己算是估算）
+- 本地 outbox（`$DSH_HOME/dsh-fangcun/outbox.jsonl`）：方寸没开也不丢，60 秒与下次启动重试
+- 幂等键 `sessionId#turn`：重复结算 / 重启后重放都只记一次（已发键落 `sent.jsonl`）
+- `health.usage.outboxPending`：当前积压条数
+- 测试：新增 `test/usage.test.mjs`，真起假方寸管道，覆盖"不丢 / 能发 / 不重 / 毒记录不卡队列 / 半轮补结算"
+
 ## 0.1.0（2026-11-03）
 
 首个版本，只做「能装 + 能自报状态」，不假装功能齐了。

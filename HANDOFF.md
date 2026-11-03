@@ -27,9 +27,13 @@
 
 **没验证过的一条**：`webserver/index-inject` 在**桌面端**是不是唯一注入通道（whale 注释说是，因为它读的是安装包里的静态 `index.html`，`tapIndex` 过不去）。真装一次就能确认。
 
-## 待做：① 用量上报（最值钱）
+## ① 用量上报（v0.2.0 已实现）
 
-**输入**：`session/event`（见事实 10）。按 `(sessionId, turn)` 聚合，`turn/end` 结算。
+代码：`lib/usage.js`（聚合 + outbox + 幂等）、`lib/mcp-pipe.js`（管道客户端）、
+`lib/index.js` 的 `apply()` 里订阅 `session/event` / `session/disposed`。
+测试：`test/usage.test.mjs`（真起一个假方寸管道，5 组，13 条断言）。
+
+**输入**：`session/event`（见事实 10）。按 `(sessionId, turn)` 聚合，`turn/end` 结算；会话销毁时补结算半轮。
 
 **输出**：方寸 MCP 工具 `usage_report`（`desktop/src/main/mcp/tools.ts:159`）：
 
@@ -51,7 +55,7 @@
 方寸的 MCP 是**换行分隔的 JSON-RPC 2.0 over named pipe**（`desktop/src/main/mcp/socket-server.ts:41-88`），最小客户端只需两步：
 
 ```
-initialize   → {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"dsh-fangcun","version":"0.1.0"}}}
+initialize   → {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"dsh-fangcun","version":"0.2.0"}}}
 tools/call   → {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"usage_report","arguments":{...}}}
 ```
 
@@ -95,11 +99,19 @@ dsh plugin --profile desktop add link:E:\path\to\dsh-fangcun
 ## 发版
 
 ```powershell
-git tag v0.1.0 && git push origin v0.1.0
+git tag v0.2.0 && git push origin v0.2.0
 ```
 
 CI（`.github/workflows/release.yml`）会：校验 tag 与 `package.json.version` 一致 → `npm test` → `npm pack` → 出 `SHA256SUMS.txt` → 建 Release 挂上资产。
 
-- 本地兜底：`gh release create v0.1.0 *.tgz SHA256SUMS.txt`
+- 本地兜底：`gh release create v0.2.0 *.tgz SHA256SUMS.txt`
 - tag 与版本不一致是最常见的翻车点：更新器会认为"没更新"
 - npm 那一路（`NPM_TOKEN` secret）已经写进工作流但默认跳过，等有账号再开
+
+## 还没验证的（真装一次才知道）
+
+1. **桌面端是否真的收到 `session/event`** —— 代码按 whale 插件的用法写，但没在真宿主上跑过。
+   验证方法：装插件 → 聊两轮 → 看 `$DSH_HOME/dsh-fangcun/{outbox,sent}.jsonl`，
+   sent.jsonl 有行 = 报上去了；outbox 有行 = 方寸没开或管道名不对。
+2. **方寸月报是否把外部记录单列**（工具描述说会，但没实测过界面）。
+3. **`webserver/index-inject` 在桌面端的行为**（做挂件时才需要）。

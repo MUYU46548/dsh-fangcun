@@ -2,9 +2,8 @@
 
 把 [方寸（tegula）](https://github.com/MUYU46548/fangcun) 任务看板接进 DSH：在 DSH 里看方寸待办，把本会话的 token 用量报回方寸账本。
 
-> **现状 v0.1.0：骨架。** 现在能装、能自报状态（`/fangcun/health.json`），
-> 但「用量上报」与「待办挂件」还没写 —— 见 [路线](#路线)。
-> 装上去打开 health 就能看到它自己承认的待办清单（`todo` 字段），不假装功能齐了。
+> **现状 v0.2.0：用量上报已可用。** 每轮会话结束把 token 报回方寸账本（方寸没开也不丢、不重记）；
+> 「待办挂件」还没写 —— 见 [路线](#路线)。装上去打开 health 就能看到它自己承认的待办清单（`todo` 字段）。
 
 **零依赖**：只用 Node 内置模块。不 import 方寸代码、不 import electron —— 这是两个仓互不锁死的前提。
 
@@ -13,7 +12,7 @@
 发版后（GitHub Release 的 `.tgz`）：
 
 ```powershell
-dsh plugin --profile desktop add https://github.com/MUYU46548/dsh-fangcun/releases/download/v0.1.0/dsh-fangcun-0.1.0.tgz
+dsh plugin --profile desktop add https://github.com/MUYU46548/dsh-fangcun/releases/download/v0.2.0/dsh-fangcun-0.2.0.tgz
 ```
 
 本地开发（软链，改源文件立即生效，目录不能移动）：
@@ -40,7 +39,7 @@ dsh plugin --profile desktop add link:C:\path\to\dsh-fangcun
 ```json
 {
   "ok": true,
-  "plugin": { "name": "dsh-fangcun", "version": "0.1.0" },
+  "plugin": { "name": "dsh-fangcun", "version": "0.2.0" },
   "contract": { "version": 1, "usageTool": "usage_report", "tasksTool": "list_tasks" },
   "fangcun": {
     "dataDir": "E:/CODE/CangKu/fangcun",
@@ -48,11 +47,31 @@ dsh plugin --profile desktop add link:C:\path\to\dsh-fangcun
     "found": { "registry": true, "taskData": true, "policies": true },
     "mcpPipe": "\\\\.\\pipe\\tegula-mcp"
   },
-  "todo": ["把本会话 token 用量经 MCP usage_report 报回方寸（v0.2.0）", "..."]
+  "usage": { "outboxPending": 0 },
+  "todo": ["待办速览挂件（webserver/index-inject + 只读路由，v0.2.0）"]
 }
 ```
 
 数据根三处来源：环境变量 `FANGCUN_DATA_DIR` → `%APPDATA%/方寸/data-dir.json` → `%APPDATA%/Fangcun/data-dir.json`。**认不出来就返回空串**，不猜路径 —— 猜错会让插件对着空目录报"一切正常"。
+
+## 用量上报（v0.2.0）
+
+每轮结束（`turn/end`）把该轮的 token 经方寸的 MCP 工具 `usage_report` 报回账本：
+
+| 字段 | 口径 |
+|---|---|
+| `prompt_tokens` | `inputTokens + cacheReadTokens`（缓存读也是输入侧 token；拆分写进 `note`） |
+| `completion_tokens` | `outputTokens`（DSH 保证 reasoning ⊆ output，不重复计） |
+| `cost` | **不发** —— DSH 只有 token、没有供应商报价；自己按价目表算是估算，不该塞进标着 "provider-reported" 的字段 |
+| `client` | `dsh` |
+
+三条保证：
+
+1. **不丢**：方寸没开 / 管道断 → 记录落 `$DSH_HOME/dsh-fangcun/outbox.jsonl`，60 秒后与下次启动重试；
+2. **不重**：幂等键 `sessionId#turn`，重复结算与进程重启后重放都只记一次（已发键落 `sent.jsonl`）；
+3. **不吵**：任何失败只写 DSH 日志，绝不影响会话。
+
+`health.usage.outboxPending` 是当前积压条数 —— 它长期为 0 才说明真的报上去了。
 
 ## 三条边界（越界即错）
 
@@ -73,8 +92,8 @@ dsh plugin --profile desktop add link:C:\path\to\dsh-fangcun
 ## 路线
 
 - **v0.1.0** ✅ 能装、能自报状态、CI 发版
-- **v0.2.0** 用量上报：`session/event` 聚合每轮 token → 经命名管道 MCP 调 `usage_report`；本地 outbox + 幂等键（方寸没开也不丢、不重记）
-- **v0.2.0** 待办挂件：`webserver/index-inject` 推内联 script + 只读路由取 `list_tasks`
+- **v0.2.0** ✅ 用量上报：`session/event` 聚合每轮 token → 命名管道 MCP `usage_report`；本地 outbox + 幂等键
+- **v0.2.x** 待办挂件：`webserver/index-inject` 推内联 script + 只读路由取 `list_tasks`
 - **以后** npm 发布（需账号），与 Release 版本同源
 
 ## 开发

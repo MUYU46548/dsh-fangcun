@@ -1,6 +1,6 @@
 {
   "name": "dsh-fangcun",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "方寸（tegula）任务看板 × DSH：在 DSH 里看方寸待办、把本会话 token 用量报回方寸账本。只走方寸的 MCP 接口，不 import 方寸代码。",
   "keywords": [
     "dsh",
@@ -53,7 +53,7 @@
     }
   },
   "scripts": {
-    "test": "node --test test/plugin.test.mjs"
+    "test": "node --test test/plugin.test.mjs test/usage.test.mjs"
   },
   "author": "MUYU46548",
   "license": "MIT"
