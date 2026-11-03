@@ -129,3 +129,52 @@ test('⑥ apply 等 webServer 就绪后注册路由；无对象级 inject', () =
   assert.equal(registered.length, mod.ROUTES.length)
   assert.equal(registered[0].path, '/fangcun/health.json')
 })
+
+/**
+ * ⑦ 接线：`apply()` 订阅 `session/event` 时，必须把**宿主的原样参数**交给账本。
+ *
+ * ⑥ 只钉了账本类能处理对象；真机上出错的恰恰是"接线把对象变成字符串"这一层。
+ * 所以这里从 `apply()` 出发、模拟宿主派发一个 Session 对象，一路走到 outbox 的 key。
+ */
+test('⑦ 接线：宿主派发 Session 对象 → outbox 的 key 是真 id（不是 [object Object]）', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-fangcun-wire-'))
+  const prevHome = process.env.DSH_HOME
+  const prevPipe = process.env.FANGCUN_MCP_PIPE
+  process.env.DSH_HOME = home
+  process.env.FANGCUN_MCP_PIPE = '' // 空 = 不连管道，只落 outbox
+  try {
+    const listeners = new Map()
+    mod.default.apply({
+      on(name, fn) { listeners.set(name, fn); return () => {} },
+      effect(fn) { fn() },
+      inject(_l, cb) { cb({ webServer: { register: () => () => {} }, effect: (fn) => { fn() } }) },
+    })
+
+    const emit = listeners.get('session/event')
+    assert.equal(typeof emit, 'function', '必须订阅 session/event')
+
+    const session = { id: 'session-9f8e7d6c-1111-2222-3333-444455556666', header: { id: 'session-9f8e7d6c-1111-2222-3333-444455556666' } }
+    emit(session, {
+      type: 'assistant/message',
+      data: { turn: 1, usage: { inputTokens: 30, cacheReadTokens: 0, outputTokens: 7 }, message: { source: { model: 'm' } } },
+    })
+    emit(session, { type: 'turn/end', data: { turn: 1, reason: 'done' } })
+
+    const outbox = path.join(home, 'dsh-fangcun', 'outbox.jsonl')
+    const rows = fs.readFileSync(outbox, 'utf-8').trim().split('\n').map((l) => JSON.parse(l))
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0].key, 'session-9f8e7d6c-1111-2222-3333-444455556666#1')
+    assert.match(rows[0].payload.note, /session=9f8e7d6c/)
+    assert.equal(rows[0].payload.prompt_tokens, 30)
+    assert.equal(rows[0].payload.completion_tokens, 7)
+
+    // health 此时应当报的是活账本的状态（能看到这次积压）
+    assert.equal(mod.collectHealth().usage.outboxPending, 1)
+  } finally {
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+    if (prevPipe === undefined) delete process.env.FANGCUN_MCP_PIPE
+    else process.env.FANGCUN_MCP_PIPE = prevPipe
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
