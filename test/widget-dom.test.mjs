@@ -58,13 +58,20 @@ function makeDom() {
 
   const head = new Node('head')
   const body = new Node('body')
+  // 拖拽要在 document 上挂 pointermove/up，替身得真的记住这些监听
+  const docListeners = {}
   const document = {
     readyState: 'complete',
     head,
     body,
     createElement(tag) { const n = new Node(tag); return n },
     getElementById(id) { return byId.get(id) || null },
-    addEventListener() {},
+    addEventListener(name, fn) { (docListeners[name] ||= []).push(fn) },
+    removeEventListener(name, fn) {
+      const arr = docListeners[name] || []
+      const i = arr.indexOf(fn)
+      if (i >= 0) arr.splice(i, 1)
+    },
   }
   // appendChild 之后才能按 id 找到（脚本挂完会 getElementById(ROOT_ID)）
   const origAppend = body.appendChild.bind(body)
@@ -89,13 +96,15 @@ function makeDom() {
 
   const storage = new Map()
   const window = {
+    innerWidth: 1280,
+    innerHeight: 800,
     localStorage: {
       getItem: (k) => (storage.has(k) ? storage.get(k) : null),
       setItem: (k, v) => storage.set(k, String(v)),
     },
     open() {},
   }
-  return { document, window, storage, body, head, byId }
+  return { document, window, storage, body, head, byId, docListeners }
 }
 
 /** 在替身环境里跑一次 WIDGET_JS，返回挂载后的根节点与观察到的请求 */
@@ -323,4 +332,63 @@ test('⑩ 默认右上角；点一下换角并记住；脏值回默认', async (
   const w3 = runWidget(dom3, { reply: TASKS })
   await w3.flush()
   assert.equal(w3.root().attrs['data-corner'], 'tr', '认不出来的值要回默认')
+})
+
+/** 面板里那个角标（不是收起后的小圆点） */
+function pillOf(w) {
+  return w.root().find((n) => /(^|\s)fc-pill(\s|$)/.test(n.className) && !/fc-mini/.test(n.className))[0]
+}
+
+/** 模拟一次拖拽：按住角标 → 移动 → 松手 */
+function drag(w, dom, from, to) {
+  const p = pillOf(w)
+  const downs = p._listeners.pointerdown || []
+  assert.ok(downs.length, '角标要挂 pointerdown')
+  downs[0]({ button: 0, clientX: from.x, clientY: from.y })
+  for (const fn of (dom.docListeners.pointermove || []).slice()) fn({ clientX: to.x, clientY: to.y, preventDefault() {} })
+  for (const fn of (dom.docListeners.pointerup || []).slice()) fn({})
+}
+
+/**
+ * ⑪ 拖拽换角 + 锁定开关。
+ *
+ * 为什么要锁：圆点的主要用途是点开面板，手一抖就被拖走比"拖不动"更烦。
+ * 所以默认**锁着**，解锁后才拖得动；拖的过程只跟手（transform），松手才吸角落盘。
+ */
+test('⑪ 拖拽换角：默认锁着拖不动；解锁后拖到右下；手抖算点击；拖完那一下点击被吞', async () => {
+  const dom = makeDom()
+  const w = runWidget(dom, { reply: TASKS })
+  await w.flush()
+  assert.equal(w.root().attrs['data-corner'], 'tr')
+
+  // 锁着：怎么拖都不动，也不落盘
+  drag(w, dom, { x: 200, y: 150 }, { x: 1200, y: 760 })
+  assert.equal(w.root().attrs['data-corner'], 'tr', '默认上锁时拖不动')
+  assert.equal(dom.storage.get('fc-todo-widget:corner'), undefined, '锁着时不该落盘')
+
+  // 打开面板 → 解锁
+  pillOf(w).onclick()
+  const lockBtn = w.root().find((n) => /fc-posbtn/.test(n.className) && /已锁定/.test(n.textContent))[0]
+  assert.ok(lockBtn, '面板里要有拖动开关')
+  lockBtn.onclick()
+  assert.equal(dom.storage.get('fc-todo-widget:locked'), '0', '解锁要存住')
+  assert.ok(w.root().find((n) => /可拖动/.test(n.textContent))[0], '解锁后开关文案要变')
+
+  // 手抖（位移不到 6px）不算拖，照常当点击
+  drag(w, dom, { x: 200, y: 150 }, { x: 202, y: 151 })
+  assert.equal(w.root().attrs['data-corner'], 'tr', '手抖不该换角')
+
+  // 真拖到右下（视口 1280×800 的右下半边）
+  drag(w, dom, { x: 200, y: 150 }, { x: 1200, y: 760 })
+  const moved = w.root()
+  assert.equal(moved.attrs['data-corner'], 'br', '落点在右下就吸到右下')
+  assert.equal(dom.storage.get('fc-todo-widget:corner'), 'br')
+  assert.equal(moved.style.bottom, '14px')
+  assert.equal(moved.style.right, '14px')
+  assert.equal(moved.style.transform, '', '松手要清掉跟手的偏移')
+
+  // 松手后浏览器补发的 click 不能顺手把面板也开了
+  const openBefore = /fc-open/.test(moved.className)
+  pillOf(w).onclick()
+  assert.equal(/fc-open/.test(w.root().className), openBefore, '刚拖完那一下点击要被吞掉')
 })

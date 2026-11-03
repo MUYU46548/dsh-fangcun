@@ -61,6 +61,8 @@
 浏览器加载 `/fangcun/widget.js` → 拉 `/fangcun/api/tasks` → 经同一根管道 `list_tasks`（10 秒缓存）。
 **位置**是客户端自己的事：四角之一存 `localStorage`（`fc-todo-widget:corner`），默认右上，
 不占右下 —— 那一角是 `dsh-whale-widget` 的（事实 14）。
+**拖动**默认上锁（`fc-todo-widget:locked`，只有存过 `'0'` 才是解锁）：解锁后按住圆点拖，
+松手按落点吸到最近的角；位移 <6px 当点击。锁着的理由是圆点主要用来点开面板。
 
 ## 4. 关键不变量 ↔ 测试
 
@@ -79,6 +81,7 @@
 | 挂件脚本能跑（真执行，不只是字符串匹配） | `widget-dom ①–⑧` |
 | **挂件只当浮层**：样式表真挂进 `<head>`、根节点按角写内联定位、折叠态内联 `display:none` | `widget-dom ⑨` |
 | 位置默认右上（右下是鲸鱼的）、四角可换、选择存 `localStorage`、脏值回默认 | `widget-dom ⑩` |
+| 拖动**默认上锁**（解锁才拖得动）、手抖 <6px 算点击、拖完吞掉那一下 click | `widget-dom ⑪` |
 | 注入行是内联 script、无 `script-src`、不重复推 | `widget ①` |
 | 只读路由：非本机 403、完成/驳回不算未完成 | `widget ③④` |
 | health 只报能自证的事实、不泄凭据 | `plugin ⑤` |
@@ -86,7 +89,7 @@
 ## 5. 本地怎么跑
 
 ```powershell
-npm test        # 34 条，不需要 DSH、不需要真方寸（真起假管道）
+npm test        # 35 条，不需要 DSH、不需要真方寸（真起假管道）
 npm pack        # 验发布包；CI 会把 tgz 解出来真 apply 一次
 ```
 
