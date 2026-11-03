@@ -49,6 +49,7 @@
 | 11 | 可选服务用 `ctx.get('x')` 读，**绝不能写进 inject**（老宿主没那服务 → 插件永不 apply） | whale 注释 |
 | 12 | `dsh plugin` 只是 pnpm 的转发壳；装/更新都靠版本号 | `dsh plugin --help` 原话 |
 | 13 | 更新器按 `package.json.repository` 找上游 Release / Tag | `dsh-plugin-updates` README |
+| 14 | **右下角是 `dsh-whale-widget` 的**：根节点 `.dshwv-root` 钉在 `right:0;bottom:0`（z-index 9999，`pointer-events:none`），宽高 122px 起 —— 挂件别往那儿放 | 已装插件 `assets/whale-widget.js` 的 CSS 原文；0.2.1 真机截图里挂件正压在鲸鱼脸上 |
 
 ## 3. 两条链路（改之前先看懂数据怎么走）
 
@@ -58,6 +59,8 @@
 
 **待办挂件**：`apply()` 最前面订阅 `webserver/index-inject` → 推一行内联 script →
 浏览器加载 `/fangcun/widget.js` → 拉 `/fangcun/api/tasks` → 经同一根管道 `list_tasks`（10 秒缓存）。
+**位置**是客户端自己的事：四角之一存 `localStorage`（`fc-todo-widget:corner`），默认右上，
+不占右下 —— 那一角是 `dsh-whale-widget` 的（事实 14）。
 
 ## 4. 关键不变量 ↔ 测试
 
@@ -74,7 +77,8 @@
 | 子代理照报但标 `subagent=1` | `usage ⑦` |
 | outbox 上限 500，丢最旧 + 报错 | `usage ⑧` |
 | 挂件脚本能跑（真执行，不只是字符串匹配） | `widget-dom ①–⑧` |
-| **挂件只当浮层**：样式表真挂进 `<head>`、根节点内联 `fixed` 定位、折叠态内联 `display:none` | `widget-dom ⑨` |
+| **挂件只当浮层**：样式表真挂进 `<head>`、根节点按角写内联定位、折叠态内联 `display:none` | `widget-dom ⑨` |
+| 位置默认右上（右下是鲸鱼的）、四角可换、选择存 `localStorage`、脏值回默认 | `widget-dom ⑩` |
 | 注入行是内联 script、无 `script-src`、不重复推 | `widget ①` |
 | 只读路由：非本机 403、完成/驳回不算未完成 | `widget ③④` |
 | health 只报能自证的事实、不泄凭据 | `plugin ⑤` |
@@ -82,7 +86,7 @@
 ## 5. 本地怎么跑
 
 ```powershell
-npm test        # 33 条，不需要 DSH、不需要真方寸（真起假管道）
+npm test        # 34 条，不需要 DSH、不需要真方寸（真起假管道）
 npm pack        # 验发布包；CI 会把 tgz 解出来真 apply 一次
 ```
 
@@ -98,7 +102,9 @@ curl.exe http://127.0.0.1:<端口>/fangcun/health.json
 
 - `usage.outboxPending > 0` → 方寸没开或管道名不对；
 - `usage.lastError` → 最近一次为什么没发出去；
-- `widget.pushed > 0 && widget.servedByPage == 0` → 行进了表但页面没执行；
+- `widget.pushed > 0 && widget.servedByPage == 0` → 行进了表但页面没执行。
+  `servedByPage` 现在认注入行自己加的 `?from=page`（桌面端 Electron 不带 `sec-fetch-*`/`referer`，
+  0.2.0 只靠请求头判断才恒为 0）；
 - 界面底部出现**一整段纯文本**（「方寸 · N」+ 一堆待办）→ 样式没生效。先看 `<head>` 里
   有没有 `#fc-todo-widget-style`：没有 = `css()` 忘了 `appendChild`（0.2.0 的错）；
   有 = 被别的样式或 CSP 挡了。这一格 `health` 看不出来，只能看 DOM；

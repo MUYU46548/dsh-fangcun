@@ -56,6 +56,8 @@ registered.find((r) => r.path === '/fangcun/widget.js')
   .handler({ method: 'GET', headers: {} }, { statusCode: 0, setHeader() {}, end(s) { widgetJs = String(s) } })
 assert.ok(widgetJs.includes('host.appendChild(s)'), '样式表要真挂进文档，否则挂件以纯文本排在页面末尾')
 assert.ok(widgetJs.includes("root.style.position = 'fixed'"), '根节点要自带内联定位兜底')
+assert.ok(widgetJs.includes('data-corner'), '位置要写进 DOM（四角可选）')
+assert.ok(widgetJs.includes("var DEFAULT_CORNER = 'tr'"), '默认右上角 —— 右下角是鲸鱼挂件的（事实 14）')
 
 // 用量接线：宿主给的是 Session 对象，落地必须是真 id（不是 [object Object]）
 const emit = listeners.get('session/event')

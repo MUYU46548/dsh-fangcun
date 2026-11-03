@@ -77,28 +77,36 @@ test('② 挂件脚本：GET 返回 JS，非 GET 405', async () => {
 /**
  * ②b 真机验收 ② 的证据：health 要能分开"行没进表"和"进了表但页面没跑"。
  * 这两个故障在真机上长得一模一样（都是"页面没角标"），分诊表里最难分的一格。
- * 判别方法是请求头：浏览器从页面加载脚本会带 sec-fetch-dest / referer，curl 不会。
+ *
+ * 主判据是注入行自己加的 `?from=page`：桌面端 Electron 的请求**既没有 sec-fetch-*
+ * 也没有 referer**，2026-11-03 真机 servedByPage 恒为 0 而挂件明明在跑。
+ * 请求头只能当辅助证据。
  */
-test('②b health 暴露注入证据链，且 curl 不会被误算成页面加载', () => {
+test('②b health 暴露注入证据链；页面标记算数、curl 不误算', () => {
   const { root, listeners } = fakeRoot()
   mod.default.apply(root)
 
   const entry = listeners.find(([name]) => name === 'webserver/index-inject')
-  entry[1]([]) // 宿主来收集一次
+  const table = []
+  entry[1](table) // 宿主来收集一次
+  assert.match(table[0].text, /\?from=page/, '注入行必须带自己的标记（桌面端没有 sec-fetch/referer）')
 
   const route = mod.ROUTES.find((r) => r.path === '/fangcun/widget.js')
-  // 探针 / curl：没有 sec-fetch-* 与 referer
-  route.handler({ method: 'GET', headers: {} }, fakeRes())
-  const before = mod.collectHealth().widget
-  assert.ok(before.pushed >= 1, '行必须进过表')
-  assert.equal(before.servedByPage, 0, 'curl 不算页面加载')
+  // 探针 / curl：没有标记、没有 sec-fetch-* 与 referer
+  route.handler({ method: 'GET', url: '/fangcun/widget.js', headers: {} }, fakeRes())
+  assert.equal(mod.collectHealth().widget.servedByPage, 0, 'curl 不算页面加载')
+  assert.ok(mod.collectHealth().widget.pushed >= 1, '行必须进过表')
 
-  // 真浏览器从页面里加载：带 sec-fetch-dest=script
+  // 页面里的注入行加载：带 ?from=page，但（Electron 那样）没有任何判别头
   const res = fakeRes()
-  route.handler({ method: 'GET', headers: { 'sec-fetch-dest': 'script', 'sec-fetch-site': 'same-origin' } }, res)
+  route.handler({ method: 'GET', url: '/fangcun/widget.js?from=page', headers: {} }, res)
   assert.equal(res.statusCode, 200)
+  assert.equal(mod.collectHealth().widget.servedByPage, 1, '带自己的标记就算页面真的执行了')
+
+  // 另一种浏览器（带了 sec-fetch-*）也照算
+  route.handler({ method: 'GET', url: '/fangcun/widget.js', headers: { 'sec-fetch-dest': 'script', 'sec-fetch-site': 'same-origin' } }, fakeRes())
   const after = mod.collectHealth().widget
-  assert.equal(after.servedByPage, 1, '带 sec-fetch-dest 的才算页面真的执行了')
+  assert.equal(after.servedByPage, 2, '带 sec-fetch-dest 的也算')
   assert.ok(after.lastServedAt, '要记下最后一次时间')
 })
 

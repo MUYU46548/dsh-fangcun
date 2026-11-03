@@ -25,6 +25,7 @@ function makeDom() {
       this.textContent = ''
       this.title = ''
       this.style = {}
+      this.attrs = {}
       this.onclick = null
       this.id = ''
       this.parentNode = null
@@ -43,7 +44,8 @@ function makeDom() {
       return node
     }
     addEventListener(name, fn) { (this._listeners[name] ||= []).push(fn) }
-    setAttribute(k, v) { if (k === 'id') this.id = v }
+    setAttribute(k, v) { this.attrs[k] = String(v); if (k === 'id') this.id = String(v) }
+    getAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attrs, k) ? this.attrs[k] : null }
     /** 供测试读：整棵子树的文字 */
     text() {
       return (this.textContent || '') + this.children.map((c) => c.text()).join('')
@@ -263,8 +265,8 @@ test('⑨ 样式表真挂进了文档；根节点自带浮层定位；折叠态�
 
   const root = w.root()
   assert.equal(root.style.position, 'fixed', '根节点要自带内联定位：不许排进页面正文')
+  assert.equal(root.style.top, '14px', '默认右上角')
   assert.equal(root.style.right, '14px')
-  assert.equal(root.style.bottom, '14px')
 
   const panel = root.find((n) => n.className === 'fc-panel')[0]
   assert.ok(panel, '面板要建出来')
@@ -273,4 +275,52 @@ test('⑨ 样式表真挂进了文档；根节点自带浮层定位；折叠态�
   root.find((n) => /fc-pill/.test(n.className) && !/fc-mini/.test(n.className))[0].onclick()
   const opened = w.root().find((n) => n.className === 'fc-panel')[0]
   assert.equal(opened.style.display, 'block', '展开时面板要显示')
+})
+
+/**
+ * ⑩ 位置：默认右上，可换四角并记住。
+ *
+ * 为什么默认不是右下：`dsh-whale-widget` 的根节点钉在 `right:0;bottom:0`（z-index 9999），
+ * 0.2.1 挂件在右下角直接压在鲸鱼脸上（用户 2026-11-03 截图）。插件之间不抢同一块地方，
+ * 但用户自己的偏好要能改 —— 四个角一键换，存 localStorage，不重启。
+ */
+test('⑩ 默认右上角；点一下换角并记住；脏值回默认', async () => {
+  const dom = makeDom()
+  const w = runWidget(dom, { reply: TASKS })
+  await w.flush()
+
+  const root = w.root()
+  assert.equal(root.attrs['data-corner'], 'tr', '默认右上角')
+  assert.equal(root.style.top, '14px')
+  assert.equal(root.style.right, '14px')
+  assert.equal(root.style.bottom, '', '右上不该同时有 bottom')
+
+  // 展开面板 → 点「左下」
+  root.find((n) => /fc-pill/.test(n.className) && !/fc-mini/.test(n.className))[0].onclick()
+  const btn = root.find((n) => /fc-posbtn/.test(n.className) && /左下/.test(n.textContent))[0]
+  assert.ok(btn, '面板里要有位置按钮')
+  btn.onclick()
+
+  assert.equal(dom.storage.get('fc-todo-widget:corner'), 'bl', '选择要存住')
+  const moved = w.root()
+  assert.equal(moved.attrs['data-corner'], 'bl')
+  assert.equal(moved.style.bottom, '14px')
+  assert.equal(moved.style.left, '14px')
+  assert.equal(moved.style.top, '', '换角要清掉上一组偏移')
+  assert.equal(moved.style.right, '')
+  assert.match(moved.className, /fc-open/, '换位置不该把面板关掉')
+
+  // 下次打开页面还记住
+  const dom2 = makeDom()
+  dom2.storage.set('fc-todo-widget:corner', 'bl')
+  const w2 = runWidget(dom2, { reply: TASKS })
+  await w2.flush()
+  assert.equal(w2.root().attrs['data-corner'], 'bl')
+
+  // 脏值不认，回默认（不拿认不出的值去算位置）
+  const dom3 = makeDom()
+  dom3.storage.set('fc-todo-widget:corner', 'middle')
+  const w3 = runWidget(dom3, { reply: TASKS })
+  await w3.flush()
+  assert.equal(w3.root().attrs['data-corner'], 'tr', '认不出来的值要回默认')
 })
