@@ -1,0 +1,75 @@
+name: release
+
+# 打 tag 即发版：v0.1.0 ↔ package.json 的 0.1.0，二者不一致直接失败。
+# 为什么必须一致：dsh-plugin-updates 是拿上游 package.json 的包名/版本去核对 Release 的，
+# 差一个字符它就会认为"没更新"。
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      # 没有这个 secret 时 npm 那一步自动跳过（v1 只发 Release）
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: tag 与 package.json.version 必须一致
+        run: |
+          set -eu
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag $GITHUB_REF_NAME 与 package.json $pkg 不一致（更新器会认为没更新）"
+            exit 1
+          fi
+          echo "版本一致：$pkg"
+
+      - name: 契约测试
+        run: npm test
+
+      - name: 打包（npm pack 不需要 npm 账号）
+        run: npm pack
+
+      - name: 校验发布包内容（别把空壳发出去）
+        run: |
+          set -eu
+          tgz="$(ls dsh-fangcun-*.tgz)"
+          tar -tzf "$tgz" > /tmp/list.txt
+          for f in package/package.json package/lib/index.js package/cordis.patch.yml package/README.md package/LICENSE; do
+            grep -qx "$f" /tmp/list.txt || { echo "::error::发布包缺 $f"; exit 1; }
+          done
+          cat /tmp/list.txt
+
+      - name: 生成校验和
+        run: |
+          set -eu
+          sha256sum dsh-fangcun-*.tgz > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: 发 GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dsh-fangcun-*.tgz
+            SHA256SUMS.txt
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+
+      - name: npm 发布（配好 NPM_TOKEN 才跑）
+        if: ${{ env.NPM_TOKEN != '' }}
+        run: |
+          set -eu
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
+          npm publish --access public

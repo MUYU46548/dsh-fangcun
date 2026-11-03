@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Fangcun task board",
+    "description": "Show Fangcun (tegula) todos inside DSH and report this session's token usage back to the Fangcun ledger."
+  }
+}

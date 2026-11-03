@@ -1,31 +1,60 @@
 {
-  "name": "fangcun-dsh",
+  "name": "dsh-fangcun",
   "version": "0.1.0",
-  "description": "方寸 × DSH 插件：在 DSH 里看方寸待办、把本会话用量报回方寸账本（只走方寸的对外接口，不 import 方寸代码）",
+  "description": "方寸（tegula）任务看板 × DSH：在 DSH 里看方寸待办、把本会话 token 用量报回方寸账本。只走方寸的 MCP 接口，不 import 方寸代码。",
   "keywords": [
     "dsh",
     "dsh-plugin",
     "deepseek-harness",
     "fangcun",
-    "tegula"
+    "tegula",
+    "task-board"
   ],
   "type": "module",
   "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "icon": "./icon.svg",
   "files": [
     "lib",
     "cordis.patch.yml",
     "README.md",
-    "HANDOFF.md"
+    "HANDOFF.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "icon.svg",
+    "locale/*.json"
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/MUYU46548/fangcun-dsh.git"
+    "url": "git+https://github.com/MUYU46548/dsh-fangcun.git"
   },
-  "homepage": "https://github.com/MUYU46548/fangcun-dsh#readme",
+  "homepage": "https://github.com/MUYU46548/dsh-fangcun#readme",
+  "bugs": {
+    "url": "https://github.com/MUYU46548/dsh-fangcun/issues"
+  },
+  "engines": {
+    "node": ">=22.0.0",
+    "dsh": ">=0.2.1-rc.2 <0.3.0"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "compatibility": {
+      "dsh": ">=0.2.1-rc.2 <0.3.0",
+      "dshReleases": {
+        "0.2.1-rc.5": "compatible"
+      }
     }
   },
+  "scripts": {
+    "test": "node --test test/plugin.test.mjs"
+  },
+  "author": "MUYU46548",
   "license": "MIT"
 }

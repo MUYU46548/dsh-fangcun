@@ -1,114 +1,105 @@
-# HANDOFF —— 把这个插件交给 DSH 自己写
+# HANDOFF —— 下一轮要做什么，以及**已经核实过的事实**
 
-> 写给接手的人/agent：这是 `fangcun-dsh` 的交接单。**先读这份，再读代码。**
-> 2026-10-26，暮雨决定：骨架已经够用，剩下的交给 DSH 自己研究（它比我更清楚宿主的 API）。
+> 写给接手的 agent：先读这份，再读代码。事实部分都标了证据，**别再自己猜一遍**；
+> 猜错的代价是"装了但插件不出现"这种要看宿主日志才能查的故障。
 
 ## 一句话目标
 
-把方寸接进 DSH：① 会话结束时把本会话的 token/金额报回方寸账本；② 在 DSH 里看方寸待办。
+把方寸接进 DSH：① 每轮把本会话 token 用量报回方寸账本；② 在 DSH 里看方寸待办。
 
-## 现状（已落地、已验证的部分）
+## 已核实的宿主事实（2026-11-03，从真插件源码读出）
 
-| 文件 | 内容 | 谁验证过 |
+| # | 事实 | 证据 |
 |---|---|---|
-| `package.json` | name `fangcun-dsh` / `type: module` / `dsh.bundle.patch` / `files` 白名单 | `scripts/test/e2e-dsh-plugin.cjs` |
-| `cordis.patch.yml` | `- insert: [{ id: fangcun-dsh, name: fangcun-dsh }]` | 同上（id/name 必须等于包名） |
-| `lib/index.js` | `export default { name, apply(root) }`；注册 `GET /fangcun/health.json` | 同上（假 root 真调 apply） |
-| `README.md` | 安装/更新来源对照、接口示例、边界、已知未验证 | — |
+| 1 | 插件导出 `export default { name, apply(root) }` | `dsh-whale-widget/lib/index.js:723` |
+| 2 | 局部等待服务：`root.inject(['webServer'], (ctx) => …)` | 同上 `:749` |
+| 3 | 注册路由：`ctx.webServer.register({ kind: 'exact', path, handler })` | `dsh-keep-awake/lib/index.js:628`、whale `:3549+` |
+| 4 | **路由没有 `method` 字段**，方法在 handler 里判 | 同上（两处 20 余条路由都是这个形状） |
+| 5 | 往页面推行：`root.on('webserver/index-inject', (table) => table.push(row))` | whale `:735` |
+| 6 | 行形状：`{ kind: 'script', placement: 'body', text }`（**内联**，不是 `script-src`） | whale `:744`、注释 `:706-717` |
+| 7 | ⚠ **那张表是宿主启动时收集一次的**：订阅晚于收集，行永远进不去 | whale 注释 `:726-730`（#152/#153 的根因） |
+| 8 | ⚠ **`script-src` 行加载失败会让整个应用起不来**（reject 掉 `__DSH_BOOT_READY__`） | whale 注释 `:709-716` |
+| 9 | 用量钩子：`ctx.on('session/event', (sessionId, event) => …)` | whale `:1128` |
+| 10 | `event.type === 'assistant/message'` 时 `event.data.usage` = `{ inputTokens, cacheReadTokens, outputTokens }`，`event.data.turn` 是轮次，`event.data.message.source.model` 是模型；`turn/end` 是结算点 | whale `:944-989` |
+| 11 | 可选服务用 `ctx.get('x')` 读，**绝不能写进 inject**（老宿主没有那个服务，整插件会永远不 apply） | whale 注释 `:1181` |
+| 12 | `dsh plugin` 只是 pnpm 的转发壳；装/更新都靠版本号 | `dsh plugin --help` 原话 |
+| 13 | 更新器按 `package.json.repository` 找上游 Release / Tag | `dsh-plugin-updates` README |
 
-`health` 只报**能自证的事实**：数据根从哪读到（env / appdata）、`registry.yaml` `task-data` `policies` 在不在、MCP 命名管道路径；**认不出数据根就返回空串，不猜路径**；并带 `todo` 字段列出还没做的三件。
+**没验证过的一条**：`webserver/index-inject` 在**桌面端**是不是唯一注入通道（whale 注释说是，因为它读的是安装包里的静态 `index.html`，`tapIndex` 过不去）。真装一次就能确认。
 
-## 已查实的 DSH 接口事实（这些就是目前全部的"文档"）
+## 待做：① 用量上报（最值钱）
 
-DSH 没有公开的插件 API 文档，下面几条是从一个真实插件（`MeteorNOX/DeepSeek-Balance-Whale-Widget`）的**实文件**里读出来的，可当事实用：
+**输入**：`session/event`（见事实 10）。按 `(sessionId, turn)` 聚合，`turn/end` 结算。
 
-1. **安装源**：`dsh plugin --profile web add <npm 名 | github:owner/repo | link:<绝对路径> | file:<绝对路径>>`
-2. **更新**：走 DSH 插件管理页拉新版本。**npm 源跟版本号；`github:` 源跟 main 当前状态**。
-3. **DSH 不认子目录**：`link:.` 的前提是"仓库根目录本身就是插件包"。所以本插件必须**独立成仓**（或至少独立成 npm 包）。
-4. **挂载声明**：`package.json` 的 `dsh.bundle.patch` 指向一个 YAML，内容是
-   ```yaml
-   - insert:
-       - id: <包名>
-         name: <包名>
-   ```
-   `id`/`name` 与包名不一致的症状是**装了但插件不出现**（宿主按名找模块）。
-5. **插件导出形态**：`export default { name, apply(root) }`（不是 `export const name` + `export function apply`）。
-6. **注册路由**：`root.inject(['webServer'], (ctx) => ctx.webServer.register(route))`。
-   ⚠ 路由对象字段名按 `{ method, path, handler }` 写的，**未在真 DSH 上验证**；若宿主认 `route`，改 `ROUTES` 一处。
-7. **桌面端注入前端脚本**：`root.on('webserver/index-inject', (table) => ...)`（参考实现用它推内联 script）。
-8. **桌面端不能用 `--profile web`**：要在桌面端会话里让 DSH 用内置 `plugin_manager` 装。
-
-参考实现（可直接读源码学形态）：`https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget`
-—— 它的 `lib/index.js` 是宿主侧插件本体，`lib/accounting.mjs` 是记账内核，`cordis.patch.yml` 只有 2 行。
-
-## 三条硬边界（越界就不许合）
-
-1. **不许 import 方寸的代码**，也不许 import `electron`。只能走方寸的对外接口：
-   命名管道 MCP（Windows `\\.\pipe\tegula-mcp`）、`tegula` CLI、数据目录里的文件。
-   —— 这条是"两个仓互不锁死"的前提，`e2e-dsh-plugin.cjs` 里钉着，加一行 import 就红。
-2. **只读方寸数据**。要写方寸必须走 MCP 工具（后面有人在把关），不直接改 `task-data/`。
-3. **不改 DSH 自己的配置**。只声明自己的路由，不 patch 别人的 bundle。
-
-## 待做三件（按价值排序）
-
-### ① 会话结束把用量报回方寸（第一优先）
-
-方寸侧**已经备好**接口：MCP 工具 `usage_report`，参数：
+**输出**：方寸 MCP 工具 `usage_report`（`desktop/src/main/mcp/tools.ts:159`）：
 
 ```jsonc
 {
-  "client": "dsh",              // 谁报的
-  "model": "deepseek-chat",
-  "prompt_tokens": 1200,
-  "completion_tokens": 300,
-  "cost": "0.0173",             // 可选；**只收人民币**，USD 会被拒（方寸不做汇率）
-  "at": "2026-10-26T08:00:00Z", // 可选；默认服务端时间
-  "note": "…"                   // 可选，120 字截断
+  "client": "dsh",
+  "model": "deepseek/deepseek-v4.1-flash",
+  "prompt_tokens": 1200,        // = inputTokens + cacheReadTokens（note 里写明拆分）
+  "completion_tokens": 300,     // = outputTokens（DSH 保证 reasoning ⊆ output，不重复计）
+  "note": "session=<id> turn=<n> cache_read=...",
+  "at": "2026-11-03T05:00:00Z"
 }
 ```
 
-服务端会：非负整数校验、空账拒绝、写进 `ai-trace.jsonl` 并标 `origin: 'external'`，
-月报表里**单独计数**（不与方寸自己的调用混算）。
+**不发 `cost`。** 方寸那个字段的语义是 "Provider-reported cost"（供应商报价），DSH 只给 token、没有 cost；自己按价目表算是**估算**，塞进去就是让账本说假话（方寸决策 D-054 同口径：token 是硬数据，元是推算）。
 
-要做的事：找到 DSH 的会话结束/每轮结束事件，把该轮的 usage 取出来，经 MCP 调 `usage_report`。
-**验收**：跑一轮 DSH 会话 → 方寸问答页月报表出现“其中 1 笔是外部上报”，金额与 token 对得上。
+### 传输：直连命名管道，别绕
 
-### ② 待办速览（次优先）
+方寸的 MCP 是**换行分隔的 JSON-RPC 2.0 over named pipe**（`desktop/src/main/mcp/socket-server.ts:41-88`），最小客户端只需两步：
 
-用 `root.on('webserver/index-inject', …)` 注入一小段前端脚本，显示"方寸待办 N 张 / 最近一条"。
-数据只读。**验收**：DSH 界面上看得到数字，且点开能列出标题（不改方寸任何数据）。
-
-### ③ 装/更新自检
-
-照参考实现的 `/update-check.json` 形态：`{ ok, current, latest, hasUpdate, source }`，**点了才联网**。
-**验收**：装旧版时自检提示有新版。
-
-## 怎么自测（不需要先发 npm）
-
-```bash
-cd <本目录>
-dsh plugin --profile web add link:$PWD      # 软链安装，改代码立即生效
-dsh --profile web --dump-config | Select-String fangcun   # 确认已进 profile
-# 重启 dsh web，然后
-curl http://127.0.0.1:<端口>/fangcun/health.json
+```
+initialize   → {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"dsh-fangcun","version":"0.1.0"}}}
+tools/call   → {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"usage_report","arguments":{...}}}
 ```
 
-`health` 的 `dataDir` 为空串 = 没找到方寸数据根 → 设 `FANGCUN_DATA_DIR` 环境变量再试。
+- Windows 管道：`\\.\pipe\tegula-mcp`（方寸侧 `pipe.ts`）
+- **不要**退回"读 `task-data/*.md`"：那会把方寸的数据格式演进变成插件的发版理由
+- **不要** import 方寸的 TS
 
-## 发到 npm（让全体 DSH 用户能更新）
+### 可靠性要求（都要有测试）
 
-```bash
-npm version patch && npm publish        # version 必须递增，否则管理页认为没更新
+1. **方寸没开**（管道不存在 / 连接失败）→ 事件进本地 outbox（`$DSH_HOME/dsh-fangcun/outbox.jsonl`），下次启动或下一轮重试；**绝不丢、绝不抛**。
+2. **幂等**：键 = `sessionId + turn`。重复结算（重试、压缩、崩溃恢复）只能记一次。
+3. **进程不背锅**：所有 I/O 失败只写 `ctx.logger.warn`，不能让 DSH 主流程感知到插件出错。
+4. **非 GET 之外不暴露写接口**；插件自己不发任何网络请求。
+
+**验收**：跑一轮 DSH 会话 → 方寸问答页月报出现 1 笔 `origin=external`，合计 token 与 DSH 侧一致。
+
+## 待做：② 待办挂件
+
+- `apply()` **最前面**注册 `root.on('webserver/index-inject', …)`（事实 7：晚注册就没了），
+  push 一行**内联** `{ kind: 'script', placement: 'body', text: '<我们自己建 <script src=…> 并吞掉 onerror>' }`。
+  **绝不用 `script-src`**（事实 8：加载失败会带走整个应用）。
+- 脚本从插件自己的只读路由取数据（`list_tasks`，经同一根管道），**只读**，不改方寸任何数据。
+- 路由要套回环/同源校验（照 keep-awake 的写法），别把"看板"变成任何网页都能读的接口。
+
+**验收**：DSH 界面看得到数字、点开能列标题；跑前跑后方寸 `task-data/` 逐字节不变。
+
+## 本地怎么测（不需要先发版）
+
+```powershell
+# 1) 契约测试（不需要 DSH）
+npm test
+
+# 2) 装进 profile（软链）
+dsh plugin --profile desktop add link:E:\path\to\dsh-fangcun
+# 3) 完全退出 DSH（含托盘）再开
+# 4) 打开 http://127.0.0.1:<端口>/fangcun/health.json
 ```
-包名 `fangcun-dsh` 目前**未占用**，第一次发布前先 `npm view fangcun-dsh` 确认。
 
-## 从方寸仓拆成独立仓（保留历史）
+`dataDir` 为空串 = 没找到方寸数据根 → 设 `FANGCUN_DATA_DIR` 再试。
 
-仓库里这份代码在 `dsh/` 子目录，是**独立仓的种子**：
+## 发版
 
-```bash
-git subtree split -P dsh -b plugin-split
-git push git@github.com:MUYU46548/fangcun-dsh.git plugin-split:main
+```powershell
+git tag v0.1.0 && git push origin v0.1.0
 ```
 
-拆完之后：本仓删掉 `dsh/`，插件自己的测试与发版都搬过去。**边界①守住的情况下，这一步没有耦合风险。**
+CI（`.github/workflows/release.yml`）会：校验 tag 与 `package.json.version` 一致 → `npm test` → `npm pack` → 出 `SHA256SUMS.txt` → 建 Release 挂上资产。
+
+- 本地兜底：`gh release create v0.1.0 *.tgz SHA256SUMS.txt`
+- tag 与版本不一致是最常见的翻车点：更新器会认为"没更新"
+- npm 那一路（`NPM_TOKEN` secret）已经写进工作流但默认跳过，等有账号再开
