@@ -497,3 +497,42 @@ test('⑮ 桌面端顶部安全区：右上角让开原生窗口按钮，下边�
   assert.equal(moved.style.bottom, '14px')
   assert.equal(moved.style.left, '14px')
 })
+
+/**
+ * ⑯ 真机 2026-11-04 晚的用户反馈："不能拖动，也不能右键，只能左键"。
+ * 拖动默认锁着是**故意的**（防手抖），但"右键没反应"就是缺功能：
+ * 右键要在原地把全部动作给出来（解锁 / 换角 / 刷新 / 收起 / 看板）。
+ */
+test('⑯ 右键出菜单：解锁拖动、换角、刷新、收起都在里面', async () => {
+  const dom = makeDom()
+  const w = runWidget(dom, { reply: TASKS })
+  await w.flush()
+
+  const pill = pillOf(w)
+  assert.equal(typeof pill.oncontextmenu, 'function', '角标要挂右键菜单')
+  pill.oncontextmenu({ clientX: 100, clientY: 80, preventDefault() {} })
+
+  const menu = dom.document.getElementById('fc-todo-widget-menu')
+  assert.ok(menu, '右键要出菜单')
+  const text = menu.text()
+  assert.match(text, /拖动：已锁定/, '默认锁着要写清楚，并给解锁入口')
+  assert.match(text, /位置：右上/)
+  assert.match(text, /收起挂件/)
+  assert.match(text, /刷新/)
+
+  const unlock = menu.find((n) => /fc-row/.test(n.className) && /拖动：已锁定/.test(n.text()))[0]
+  unlock.onclick()
+  assert.equal(dom.storage.get('fc-todo-widget:locked'), '0', '菜单里解锁也要落盘')
+  assert.equal(dom.document.getElementById('fc-todo-widget-menu'), null, '点完要收起来')
+  assert.ok(w.root().find((n) => /可拖动/.test(n.text()))[0], '面板里应随之显示可拖动')
+})
+
+/** ⑰ 锁着的时候硬拖：位置不许动，但必须给一句解释（不然用户以为坏了） */
+test('⑰ 锁着时硬拖：不动，但会说明"拖动已锁定"', async () => {
+  const dom = makeDom()
+  const w = runWidget(dom, { reply: TASKS })
+  await w.flush()
+  drag(w, dom, { x: 200, y: 150 }, { x: 1200, y: 760 })
+  assert.equal(w.root().attrs['data-corner'], 'tr', '锁着就是不许动')
+  assert.match(w.root().text(), /拖动已锁定/, '要解释为什么拖不动')
+})
