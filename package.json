@@ -47,7 +47,8 @@
     "compatibility": {
       "dsh": ">=0.2.1-rc.2 <0.3.0",
       "dshReleases": {
-        "0.2.1-rc.5": "compatible"
+        "0.2.1-rc.5": "compatible",
+        "0.2.2-rc.1": "compatible"
       }
     }
   },

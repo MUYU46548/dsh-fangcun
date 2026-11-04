@@ -65,16 +65,22 @@
 - **health**：`fangcun.installed / installedEvidence / downloadUrl`；`/fangcun/api/tasks` 的
   200 与 503 都带上这两个字段，挂件据此选界面。
 
+- **真因（2026-11-04 晚，重启后的自证链给出来的）**：桌面窗口在 Windows 上是
+  `titleBarStyle:'hidden'` + `titleBarOverlay{height:40}` —— 页面铺满整窗，**顶上 40px 被原生窗口按钮盖住**。
+  挂件挂在 `top:14px`，DOM 里完全正常（`probe` 显示 `in=1`、`hit=fc-pill`），人眼就是看不见。
+  现在顶部两个角会量 `env(titlebar-area-height)` 让开（浏览器页量到 0，行为不变）。
+
 ### 测试
 
-57 条（`npm test`）：
+58 条（`npm test`）：
 
 - 新增 `test/prompt.test.mjs`：规则段四个触发点、注册与撤销、provider 抛错兜底、
   一行现状格式（全部项目 / 指定项目 / 未连接 / 未知）、未完成口径、BoardStatus 真起假管道、
   自证过滤与上限；
 - 新增 `test/detect.test.mjs`：干净机器判未安装并列出查过哪几处、五种装机痕迹各自认得出来、
   环境变量缺失时**不许拼相对路径**、诊断文本是人话；
-- `test/widget-dom.test.mjs` 新增 ⑬⑭（没装给下载入口 / 装了没开仍说未连接）；
+- `test/widget-dom.test.mjs` 新增 ⑬⑭（没装给下载入口 / 装了没开仍说未连接）与
+  ⑮（桌面端顶部安全区：右上角让开原生窗口按钮，下边的角不受影响）；
 - `test/widget.test.mjs` 新增 ⑥（装机判定进 health 与 tasks 响应，没装才给下载地址）；
 - `test/widget-dom.test.mjs` 新增 ⑨⑩⑪（样式表挂进文档 / 位置四角 / 拖拽与锁定）与
   ⑫（根节点被摘掉时自动补挂、不重复起轮询）；

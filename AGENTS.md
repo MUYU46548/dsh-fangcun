@@ -56,6 +56,7 @@
 | 18 | **桌面端页面不是 http，是 `dsh-app://app/`**：主窗口加载它，页面侧靠 IPC `dshDesktopBoot` 拿注入表并**自己执行**；`/fangcun/*` 这类不是 dist 文件的路径由主进程 `forwardWebRequest` 带上 host cookie 转发到 Host —— 所以挂件在桌面端照样拉得到脚本和接口 | `app.asar` 的 `/lib/main.js`：`protocol.handle(SCHEME, …)` + `forwardWebRequest()`；`dsh-web-frontend` 的 `UZ()` |
 | 19 | **`collectIndexInjections()` 每次调用都新发一张表**（"Fresh per call"）。`widget.injected/pushed` 是**收集次数**（桌面 boot 一次 + 每次 index 渲染一次），**不是插件 apply 次数**，别当重复安装的证据 | `webServer` 服务原文：`collectIndexInjections()` 描述 + 2026-11-04 实测 2/2 而 `package.json` 只有一处安装 |
 | 20 | 桌面端 `kind:'script'` 行 = 页面侧建内联 `<script>` **append 到 `body`**（`placement` 决定 head/body）。`script-src` 走 `await` 加载、失败会 reject 启动 —— 别用 | 同上 `UZ()` 实现 |
+| 21 | ⚠ **桌面窗口顶上 40px 是原生窗口按钮区**：Windows 上用 `titleBarStyle:'hidden'` + `titleBarOverlay{height:40}`，页面铺满整窗、**被原生层盖住**。DOM 里放在 `top:14px` 的东西 `elementFromPoint` 仍命中它自己，但人眼看不见（2026-11-04 真机：挂件"消失"的真因）。让开用 `env(titlebar-area-height)`（Chromium 在开了 overlay 的窗口里提供） | `app.asar /lib/main.js` 的 `new BrowserWindow({ titleBarStyle: 'hidden', titleBarOverlay: { height: 40 } })`（0.2.2-rc.1）+ 真机 probe |
 
 ## 3. 四条链路（改之前先看懂数据怎么走）
 
@@ -114,6 +115,7 @@ electron-updater 目录 / 开始菜单与桌面快捷方式 / Program Files 与 
 | 挂件不安静消失：根节点被摘掉会**自动补挂**且不重复起轮询 | `widget-dom ⑫` |
 | 页面自证：`boot/mount/probe/removed/error` 进 `health.widget.page`，只收本机 | `widget ⑤` |
 | **没装本体 ≠ 没连上**：装机判定只看文件痕迹、结论进 health、挂件给下载入口 | `detect ①–⑥`、`widget ⑥`、`widget-dom ⑬⑭`、`prompt ④` |
+| **顶部不吃原生窗口按钮区**：右上/左上让开 `env(titlebar-area-height)`，下边的角不受影响 | `widget-dom ⑮` |
 | 注入行是内联 script、无 `script-src`、不重复推 | `widget ①` |
 | 只读路由：非本机 403、完成/驳回不算未完成 | `widget ③④` |
 | 规则段含四个触发点 + 「闲聊不查」；注册与撤销成对 | `prompt ①②` |
@@ -125,7 +127,7 @@ electron-updater 目录 / 开始菜单与桌面快捷方式 / Program Files 与 
 ## 5. 本地怎么跑
 
 ```powershell
-npm test        # 57 条，不需要 DSH、不需要真方寸（真起假管道）
+npm test        # 58 条，不需要 DSH、不需要真方寸（真起假管道）
 npm pack        # 验发布包；CI 会把 tgz 解出来真 apply 一次
 ```
 
@@ -149,6 +151,9 @@ curl.exe http://127.0.0.1:<端口>/fangcun/health.json
   `removed` = 被谁摘掉（已自动补挂），`error` / `script-missing` = 脚本没跑成。
   **有 boot 没 mount** = 挂件脚本执行失败，看紧跟着的 `error`；**servedByPage 涨但 page.count 不涨**
   = 请求根本没到页面（或被挡在脚本执行前）；
+- `probe` 里的 `tb` 是量到的**顶部安全区**（桌面端应为 40，浏览器页为 0），`y` 应当 ≈ `tb + 14`。
+  `tb=0` 而窗口明明有原生按钮 → overlay 的 `env(titlebar-area-height)` 没读到，
+  右上角会被原生窗口按钮盖住（事实 21，2026-11-04 的"挂件消失"就是这个）；
 - 界面底部出现**一整段纯文本**（「方寸 · N」+ 一堆待办）→ 样式没生效。先看 `<head>` 里
   有没有 `#fc-todo-widget-style`：没有 = `css()` 忘了 `appendChild`（0.2.0 的错）；
   有 = 被别的样式或 CSP 挡了。这一格 `health` 看不出来，只能看 DOM；
@@ -199,12 +204,12 @@ CI 会：校验 tag 与 `package.json.version` 一致 → `npm test` → `npm pa
 3. 会话压缩/恢复期之外的 turn 语义没再验过（现存结论：不回绕，见事实 10e）。
 4. **0.3.0 的三件事只在单测里绿过**（规则段 / 一行现状 / 自证），真机要重启后按
    `health.prompt.rules`、上下文里那一行、`tools.jsonl` 三项复核；②⑦–⑩ 的验收也依赖它。
-5. **2026-11-04 真机回归：重启后桌面端挂件不见了**。已有的事实：脚本被取走过一次
-   （`servedByPage=1`）、`/fangcun/api/tasks` 其后每 60 秒被调一次（说明脚本确实跑起来过、
-   定时器还活着）、页面里却没有挂件 —— 指向"挂上去之后被摘掉 / 被盖住"。
-   现在已加页面自证 + 自动补挂；**下次重启先看 `health.widget.page.events`**：
-   有 `mount` 有 `probe` 且 `in=1` 就该能看见；有 `removed` 说明补挂逻辑要再看；
-   有 `boot` 没 `mount` 就看 `error`。**拿到这段证据之前不要打 `v0.3.0` tag**。
+5. **2026-11-04 真机回归：重启后桌面端挂件不见了 —— 真因已定位并修掉，只差一次页面重载确认。**
+   自证链给出了答案：`boot(href=dsh-app://app/, rs=complete)` → `mount(hidden=0, corner=tr)` →
+   `probe(w=91,h=32,x=1175,y=14,in=1,hit=fc-pill)`，**没有** `removed`。也就是说挂件一直在 DOM 里、
+   命中测试也命中它自己，就是人眼看不见 —— 因为桌面窗口顶上 40px 是原生窗口按钮区（事实 21）。
+   修法：顶部两个角让开 `env(titlebar-area-height)`（`widget-dom ⑮`）。重载后 `probe.tb` 应为 40、
+   `y` 应为 54。**`probe` 显示 `y=14`/`tb=0` 就是没生效，别打 tag。**
 
 ## 9. 文档地图
 

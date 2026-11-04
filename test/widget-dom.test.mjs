@@ -12,9 +12,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { WIDGET_JS, WIDGET_ROUTE } from '../lib/widget.js'
 
-/** 极简 DOM 替身 */
-function makeDom() {
+/** 极简 DOM 替身。`titlebar: 40` 模拟桌面端被原生窗口按钮盖住的顶部安全区 */
+function makeDom(options = {}) {
   const byId = new Map()
+  const titlebar = Number(options.titlebar) || 0
 
   class Node {
     constructor(tag) {
@@ -54,6 +55,13 @@ function makeDom() {
     find(pred, out = []) {
       for (const c of this.children) { if (pred(c)) out.push(c); c.find(pred, out) }
       return out
+    }
+  }
+
+  // 只有显式要求时才给布局能力：不然 mount 会排一个 probe 定时器，搅乱 ① 的计数断言
+  if (titlebar > 0) {
+    Node.prototype.getBoundingClientRect = function () {
+      return { width: 0, height: titlebar, left: 0, top: 0, right: 0, bottom: 0 }
     }
   }
 
@@ -465,4 +473,27 @@ test('⑭ 装了但没开：仍然说未连接，不给下载链接', async () =
   assert.match(w.root().text(), /方寸未连接/)
   pillOf(w).onclick()
   assert.doesNotMatch(w.root().text(), /去下载/, '装了就别劝人再下一遍')
+})
+
+/**
+ * ⑮ 真机 2026-11-04 晚的最后一格：桌面端窗口是 `titleBarStyle:'hidden'` +
+ * `titleBarOverlay{height:40}`，页面铺满整窗，**顶上 40px 被原生窗口按钮盖住**。
+ * 挂件在 top:14px 时 DOM 里一切正常（自证 probe 命中自己），人眼却看不见。
+ * 所以顶部两个角要自动让开 `env(titlebar-area-height)`；下边的角不吃这个偏移。
+ */
+test('⑮ 桌面端顶部安全区：右上角让开原生窗口按钮，下边的角不受影响', async () => {
+  const dom = makeDom({ titlebar: 40 })
+  const w = runWidget(dom, { reply: TASKS })
+  await w.flush()
+  const root = w.root()
+  assert.equal(root.style.top, '54px', '40 的安全区 + 14 的边距')
+  assert.equal(root.style.right, '14px')
+
+  pillOf(w).onclick()
+  const btn = w.root().find((n) => /fc-posbtn/.test(n.className) && /左下/.test(n.textContent))[0]
+  btn.onclick()
+  const moved = w.root()
+  assert.equal(moved.style.top, '', '下边的角不需要顶部安全区')
+  assert.equal(moved.style.bottom, '14px')
+  assert.equal(moved.style.left, '14px')
 })
