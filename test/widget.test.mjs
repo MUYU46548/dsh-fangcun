@@ -56,6 +56,9 @@ test('① 注入行：内联 script、指向自己的脚本、重复推只留一
 
   entry[1](table) // 宿主可能多次收集
   assert.equal(table.length, 1, '重复推会重复加载脚本')
+  // 页面自证：注入行要报 boot，并挂全局错误监听（不然失败全靠猜）
+  assert.match(table[0].text, /\/fangcun\/api\/widget-report/, '注入行要留自证入口')
+  assert.match(table[0].text, /addEventListener\("error"/, '要挂全局 error 监听')
 })
 
 test('② 挂件脚本：GET 返回 JS，非 GET 405', async () => {
@@ -116,6 +119,40 @@ test('③ 只读接口：非本机来源 403', async () => {
   await route.handler({ method: 'GET', socket: { remoteAddress: '10.0.0.8' } }, res)
   assert.equal(res.statusCode, 403)
   assert.match(res.body, /本机/)
+})
+
+/**
+ * ⑤ 页面自证：脚本跑没跑、挂没挂上，只有页面自己知道。
+ * 这条路由是那条证据链的入口 —— 它坏了，下次"挂件消失"又只能靠猜。
+ */
+test('⑤ 页面自证上报：本机 GET 记账、非本机 403、非 GET 405', () => {
+  const route = mod.ROUTES.find((r) => r.path === '/fangcun/api/widget-report')
+  assert.ok(route, '必须注册 /fangcun/api/widget-report')
+
+  const before = mod.collectHealth().widget.page.count
+  const res = fakeRes()
+  route.handler({
+    method: 'GET',
+    url: '/fangcun/api/widget-report?e=mount&t=123&href=dsh-app%3A%2F%2Fapp%2F&rs=loading',
+    socket: { remoteAddress: '127.0.0.1' },
+  }, res)
+  assert.equal(res.statusCode, 204, '信标不需要响应体')
+
+  const page = mod.collectHealth().widget.page
+  assert.equal(page.count, before + 1)
+  assert.ok(page.lastAt, '要记时间')
+  const last = page.events[page.events.length - 1]
+  assert.equal(last.e, 'mount')
+  assert.match(last.q, /href=dsh-app/, '要留页面地址：桌面端与浏览器页面是两回事')
+  assert.doesNotMatch(last.q, /(^|&)t=\d+/, '时间戳有 at 字段，别把噪声塞进历史')
+
+  const forbidden = fakeRes()
+  route.handler({ method: 'GET', url: '/fangcun/api/widget-report?e=boot', socket: { remoteAddress: '10.0.0.9' } }, forbidden)
+  assert.equal(forbidden.statusCode, 403)
+
+  const bad = fakeRes()
+  route.handler({ method: 'POST', url: '/fangcun/api/widget-report', socket: { remoteAddress: '127.0.0.1' } }, bad)
+  assert.equal(bad.statusCode, 405)
 })
 
 test('④ 只读接口：经 MCP list_tasks 取数；完成/驳回不算未完成，空状态算', async () => {

@@ -38,7 +38,7 @@ mod.default.apply({
 
 assert.deepEqual(
   registered.map((r) => r.path).sort(),
-  ['/fangcun/api/tasks', '/fangcun/health.json', '/fangcun/widget.js'],
+  ['/fangcun/api/tasks', '/fangcun/api/widget-report', '/fangcun/health.json', '/fangcun/widget.js'],
   '发布包里的路由必须齐',
 )
 

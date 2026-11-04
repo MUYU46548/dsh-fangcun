@@ -37,14 +37,32 @@
   旧判据在真机上恒为 0 —— 「页面在跑」被读成「没人来取」。
   现在主判据换成注入行自己加的 `?from=page`，请求头只当辅助。
 
+### 桌面端挂件消失（2026-11-04 真机回归）
+
+重启之后桌面端**看不见挂件**，但证据不是"没装上"：脚本被页面取走过（`servedByPage=1`），
+之后 `/fangcun/api/tasks` 每 60 秒仍被调用 —— 说明脚本确实跑起来过、定时器还活着，
+只是页面上没有那个角标。桌面端页面是 `dsh-app://app/`，注入行由页面侧解释执行，
+中间任何一环静默失败都只看得到"挂件没了"。
+
+- **页面自证**：注入行一执行就报 `boot`（页面地址 / readyState），挂上时报 `mount`，
+  800ms 后报 `probe`（量到的位置、命中元素是不是自己），根节点被摘掉报 `removed`，
+  脚本语法错 / 404 / 被 CSP 挡 / `mount()` 抛异常都由**注入行挂的全局 error 监听**报上来。
+  落在 `/fangcun/api/widget-report`（只收本机），`health.widget.page` 留最近 12 条。
+- **被摘掉自动补挂**：`MutationObserver` 盯 `body.childList`，根节点不在就重建（不重复起轮询）。
+- **收起态改成带字的胶囊**：以前收起只留 8px 绿点，用户只会说"挂件没了"；现在写「方寸」。
+- `health.widget` 的口径补清楚：`injected/pushed` 是**注入表被收集的次数**（桌面 boot 一次 +
+  每次 index 渲染一次），不是插件被 apply 了几次。
+
 ### 测试
 
-46 条（`npm test`）：
+48 条（`npm test`）：
 
 - 新增 `test/prompt.test.mjs`：规则段四个触发点、注册与撤销、provider 抛错兜底、
   一行现状格式（全部项目 / 指定项目 / 未连接 / 未知）、未完成口径、BoardStatus 真起假管道、
   自证过滤与上限；
-- `test/widget-dom.test.mjs` 新增 ⑨⑩⑪（样式表挂进文档 / 位置四角 / 拖拽与锁定）；
+- `test/widget-dom.test.mjs` 新增 ⑨⑩⑪（样式表挂进文档 / 位置四角 / 拖拽与锁定）与
+  ⑫（根节点被摘掉时自动补挂、不重复起轮询）；
+- `test/widget.test.mjs` 新增 ⑤（页面自证上报：本机记账、非本机 403、非 GET 405）；
 - `test/plugin.test.mjs` 新增 ⑧⑨（apply 真的注册了提示词、方寸工具真的落了自证日志、没服务时不假装）；
 - `test/widget.test.mjs` ②b 改写为"带标记算、curl 不算、没头的浏览器也算"；
 - 变异验证：去掉 `appendChild` 只有挂件 ⑨ 红；默认角改回右下 ⑨⑩ 红；

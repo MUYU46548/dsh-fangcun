@@ -53,6 +53,9 @@
 | 15 | 提示词注册：`ctx.systemPrompt.section({ name, order, text })` 与 `.context({ name, order, text })`；`text` 可以是**同步函数**（装配时调用，**不能 await**）；服务用 `ctx.get('systemPrompt')` 读 | 本机 `cordis_inspect_query` 的 `Service.listService` 原文：`PromptSection` / `PromptContext` 声明 |
 | 16 | `tool/call` 事件数据 = `{ turn, step, callId, name, arguments }`；方寸工具在会话里叫 `mcp__fangcun__<tool>` | `session/event` 的 `SessionEventMap` 声明 + 本会话工具表 |
 | 17 | **桌面端 Electron 的请求不带 `sec-fetch-*`，也不带 `referer`**（挂件脚本那次实测 `servedByPage` 恒为 0）。判"页面真的来取"要靠自己加的标记，别靠头 | 2026-11-03 真机：页面有挂件、health 却是 0 |
+| 18 | **桌面端页面不是 http，是 `dsh-app://app/`**：主窗口加载它，页面侧靠 IPC `dshDesktopBoot` 拿注入表并**自己执行**；`/fangcun/*` 这类不是 dist 文件的路径由主进程 `forwardWebRequest` 带上 host cookie 转发到 Host —— 所以挂件在桌面端照样拉得到脚本和接口 | `app.asar` 的 `/lib/main.js`：`protocol.handle(SCHEME, …)` + `forwardWebRequest()`；`dsh-web-frontend` 的 `UZ()` |
+| 19 | **`collectIndexInjections()` 每次调用都新发一张表**（"Fresh per call"）。`widget.injected/pushed` 是**收集次数**（桌面 boot 一次 + 每次 index 渲染一次），**不是插件 apply 次数**，别当重复安装的证据 | `webServer` 服务原文：`collectIndexInjections()` 描述 + 2026-11-04 实测 2/2 而 `package.json` 只有一处安装 |
+| 20 | 桌面端 `kind:'script'` 行 = 页面侧建内联 `<script>` **append 到 `body`**（`placement` 决定 head/body）。`script-src` 走 `await` 加载、失败会 reject 启动 —— 别用 | 同上 `UZ()` 实现 |
 
 ## 3. 四条链路（改之前先看懂数据怎么走）
 
@@ -65,7 +68,14 @@
 **位置**是客户端自己的事：四角之一存 `localStorage`（`fc-todo-widget:corner`），默认右上，
 不占右下 —— 那一角是 `dsh-whale-widget` 的（事实 14）。
 **拖动**默认上锁（`fc-todo-widget:locked`，只有存过 `'0'` 才是解锁）：解锁后按住圆点拖，
-松手按落点吸到最近的角；位移 <6px 当点击。锁着的理由是圆点主要用来点开面板。
+松手按落点吸到最近的角；位移 <6px 当点击。锁着的理由是圆点主要用来点开面板。收起后是带「方寸」
+字样的小胶囊（只留一个 8px 的绿点，用户只会说"挂件没了"）。
+
+**挂件自证**：注入行一执行就报 `boot`（页面地址 / readyState），`mount()` 报 `mount`，
+800ms 后报 `probe`（量出来的位置、命中的是不是自己），根节点被谁摘掉报 `removed` 并**自动补挂**；
+注入行还挂了全局 `error` 监听（语法错 / 404 / CSP / mount 抛异常都会报）。全部落
+`/fangcun/api/widget-report`，`health.widget.page.events` 留最近 12 条。桌面端
+`servedByPage` 只能证明"脚本被取走"，证明不了"它跑起来且还在页面上"。
 
 **提示词**：`apply()` 里 `root.get('systemPrompt')`（拿不到就 3 秒后重试一次，仍没有就写进
 `health.prompt.error`；**不写进 inject**，否则老宿主上插件永不 apply）→
@@ -94,6 +104,8 @@
 | **挂件只当浮层**：样式表真挂进 `<head>`、根节点按角写内联定位、折叠态内联 `display:none` | `widget-dom ⑨` |
 | 位置默认右上（右下是鲸鱼的）、四角可换、选择存 `localStorage`、脏值回默认 | `widget-dom ⑩` |
 | 拖动**默认上锁**（解锁才拖得动）、手抖 <6px 算点击、拖完吞掉那一下 click | `widget-dom ⑪` |
+| 挂件不安静消失：根节点被摘掉会**自动补挂**且不重复起轮询 | `widget-dom ⑫` |
+| 页面自证：`boot/mount/probe/removed/error` 进 `health.widget.page`，只收本机 | `widget ⑤` |
 | 注入行是内联 script、无 `script-src`、不重复推 | `widget ①` |
 | 只读路由：非本机 403、完成/驳回不算未完成 | `widget ③④` |
 | 规则段含四个触发点 + 「闲聊不查」；注册与撤销成对 | `prompt ①②` |
@@ -105,7 +117,7 @@
 ## 5. 本地怎么跑
 
 ```powershell
-npm test        # 46 条，不需要 DSH、不需要真方寸（真起假管道）
+npm test        # 48 条，不需要 DSH、不需要真方寸（真起假管道）
 npm pack        # 验发布包；CI 会把 tgz 解出来真 apply 一次
 ```
 
@@ -124,6 +136,11 @@ curl.exe http://127.0.0.1:<端口>/fangcun/health.json
 - `widget.pushed > 0 && widget.servedByPage == 0` → 行进了表但页面没执行。
   `servedByPage` 现在认注入行自己加的 `?from=page`（桌面端 Electron 不带 `sec-fetch-*`/`referer`，
   0.2.0 只靠请求头判断才恒为 0）；
+- **`widget.page.events` 是"页面自己说跑到哪一步"**（2026-11-04 起）：`boot` = 注入行执行了，
+  `mount` = 根节点挂上了（带页面地址与 readyState），`probe` = 量到位置、命中元素，
+  `removed` = 被谁摘掉（已自动补挂），`error` / `script-missing` = 脚本没跑成。
+  **有 boot 没 mount** = 挂件脚本执行失败，看紧跟着的 `error`；**servedByPage 涨但 page.count 不涨**
+  = 请求根本没到页面（或被挡在脚本执行前）；
 - 界面底部出现**一整段纯文本**（「方寸 · N」+ 一堆待办）→ 样式没生效。先看 `<head>` 里
   有没有 `#fc-todo-widget-style`：没有 = `css()` 忘了 `appendChild`（0.2.0 的错）；
   有 = 被别的样式或 CSP 挡了。这一格 `health` 看不出来，只能看 DOM；
@@ -170,6 +187,12 @@ CI 会：校验 tag 与 `package.json.version` 一致 → `npm test` → `npm pa
 3. 会话压缩/恢复期之外的 turn 语义没再验过（现存结论：不回绕，见事实 10e）。
 4. **0.3.0 的三件事只在单测里绿过**（规则段 / 一行现状 / 自证），真机要重启后按
    `health.prompt.rules`、上下文里那一行、`tools.jsonl` 三项复核；②⑦–⑩ 的验收也依赖它。
+5. **2026-11-04 真机回归：重启后桌面端挂件不见了**。已有的事实：脚本被取走过一次
+   （`servedByPage=1`）、`/fangcun/api/tasks` 其后每 60 秒被调一次（说明脚本确实跑起来过、
+   定时器还活着）、页面里却没有挂件 —— 指向"挂上去之后被摘掉 / 被盖住"。
+   现在已加页面自证 + 自动补挂；**下次重启先看 `health.widget.page.events`**：
+   有 `mount` 有 `probe` 且 `in=1` 就该能看见；有 `removed` 说明补挂逻辑要再看；
+   有 `boot` 没 `mount` 就看 `error`。**拿到这段证据之前不要打 `v0.3.0` tag**。
 
 ## 9. 文档地图
 

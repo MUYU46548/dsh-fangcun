@@ -41,6 +41,7 @@ function makeDom() {
       const i = this.children.indexOf(node)
       if (i >= 0) this.children.splice(i, 1)
       node.parentNode = null
+      if (node.id) byId.delete(node.id) // 摘掉之后 getElementById 必须真的找不到（否则"被摘掉"测不出来）
       return node
     }
     addEventListener(name, fn) { (this._listeners[name] ||= []).push(fn) }
@@ -95,6 +96,13 @@ function makeDom() {
   }
 
   const storage = new Map()
+  // MutationObserver 替身：只记回调，测试里手动 fire（真浏览器由宿主重渲染触发）
+  const observers = []
+  class MutationObserver {
+    constructor(cb) { this.cb = cb; observers.push(this) }
+    observe() {}
+    disconnect() {}
+  }
   const window = {
     innerWidth: 1280,
     innerHeight: 800,
@@ -104,7 +112,7 @@ function makeDom() {
     },
     open() {},
   }
-  return { document, window, storage, body, head, byId, docListeners }
+  return { document, window, storage, body, head, byId, docListeners, MutationObserver, observers }
 }
 
 /** 在替身环境里跑一次 WIDGET_JS，返回挂载后的根节点与观察到的请求 */
@@ -122,6 +130,7 @@ function runWidget(dom, { reply, onFetch } = {}) {
     fetch,
     setTimeout: (fn) => { timers.push(fn); return 0 },
     setInterval: (fn) => { timers.push(fn); return 0 },
+    MutationObserver: dom.MutationObserver,
     console,
   }
   const names = Object.keys(sandbox)
@@ -391,4 +400,33 @@ test('⑪ 拖拽换角：默认锁着拖不动；解锁后拖到右下；手抖�
   const openBefore = /fc-open/.test(moved.className)
   pillOf(w).onclick()
   assert.equal(/fc-open/.test(w.root().className), openBefore, '刚拖完那一下点击要被吞掉')
+})
+
+/**
+ * ⑫ 真机 2026-11-04 的教训：挂件"消失了"，但脚本明明在轮询。
+ * 也就是说它挂上去过，之后被人从 body 摘掉 —— 定时器还在跑，界面却没有。
+ * 这类故障必须自己修复 + 留下证据（removed），不能靠用户去猜。
+ */
+test('⑫ 根节点被摘掉：自动补挂，且不重复起轮询', async () => {
+  const dom = makeDom()
+  let fetches = 0
+  const w = runWidget(dom, { reply: TASKS, onFetch: () => { fetches += 1 } })
+  await w.flush()
+  const first = w.root()
+  assert.ok(first, '先要挂上')
+  assert.equal(fetches, 1, '挂载时拉一次')
+
+  dom.document.body.removeChild(first)
+  assert.equal(w.root(), null, '摘掉之后（替身里）也找不到')
+
+  for (const o of dom.observers) o.cb([]) // 宿主重渲染 → childList 变动
+  const pending = w.timers[w.timers.length - 1]
+  assert.equal(typeof pending, 'function', '被摘掉要排一次补挂')
+  pending()
+
+  const again = w.root()
+  assert.ok(again, '摘掉后必须自己挂回来')
+  assert.notEqual(again, first, '要新建节点，别拿已经脱离文档的旧节点糊弄')
+  assert.match(again.text(), /方寸 · 3/)
+  assert.equal(fetches, 1, '补挂不该再拉一遍数据（轮询已经在跑）')
 })
