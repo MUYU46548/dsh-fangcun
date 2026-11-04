@@ -53,13 +53,29 @@
 - `health.widget` 的口径补清楚：`injected/pushed` 是**注入表被收集的次数**（桌面 boot 一次 +
   每次 index 渲染一次），不是插件被 apply 了几次。
 
+### 没装方寸本体：直接给下载入口（2026-11-04）
+
+以前只有两句「未连接」，可"压根没装"和"装了没开"要人做的事完全不同。现在分开：
+
+- **只读文件判定装机痕迹**（`lib/detect.js`）：`data-dir.json` → Electron userData →
+  electron-updater 目录 → 开始菜单/桌面快捷方式 → Program Files / Programs 下的同名字目录。
+  不跑进程、不发网络请求；装了没跑也认得出（安装器建的快捷方式）；
+- **挂件角标**：「方寸未安装 · 去下载」，面板里给 `releases/latest` 地址，装好后点「重试」；
+- **一行现状**：「方寸 · 未安装」（不再混成「未连接」），规则段同时教 agent 把下载地址说出来；
+- **health**：`fangcun.installed / installedEvidence / downloadUrl`；`/fangcun/api/tasks` 的
+  200 与 503 都带上这两个字段，挂件据此选界面。
+
 ### 测试
 
-48 条（`npm test`）：
+57 条（`npm test`）：
 
 - 新增 `test/prompt.test.mjs`：规则段四个触发点、注册与撤销、provider 抛错兜底、
   一行现状格式（全部项目 / 指定项目 / 未连接 / 未知）、未完成口径、BoardStatus 真起假管道、
   自证过滤与上限；
+- 新增 `test/detect.test.mjs`：干净机器判未安装并列出查过哪几处、五种装机痕迹各自认得出来、
+  环境变量缺失时**不许拼相对路径**、诊断文本是人话；
+- `test/widget-dom.test.mjs` 新增 ⑬⑭（没装给下载入口 / 装了没开仍说未连接）；
+- `test/widget.test.mjs` 新增 ⑥（装机判定进 health 与 tasks 响应，没装才给下载地址）；
 - `test/widget-dom.test.mjs` 新增 ⑨⑩⑪（样式表挂进文档 / 位置四角 / 拖拽与锁定）与
   ⑫（根节点被摘掉时自动补挂、不重复起轮询）；
 - `test/widget.test.mjs` 新增 ⑤（页面自证上报：本机记账、非本机 403、非 GET 405）；

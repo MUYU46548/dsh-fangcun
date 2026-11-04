@@ -39,7 +39,7 @@ dsh plugin --profile desktop add https://github.com/MUYU46548/dsh-fangcun/releas
 > 建议把安装和更新都交给 DSH 里的 Agent 处理：它自己能装、能查 health、能判断装没装好。
 > 插件更新由 `dsh-plugin-updates` 负责 —— 只要本仓库发了新的 Release，它就能认出来，不需要你再手工下载。
 
-**装完怎么确认？** 浏览器打开 `http://127.0.0.1:<DSH 端口>/fangcun/health.json`，应当看到 `"ok": true` 与 `"version": "0.2.0"`。端口从 DSH 窗口地址里取。
+**装完怎么确认？** 浏览器打开 `http://127.0.0.1:<DSH 端口>/fangcun/health.json`，应当看到 `"ok": true` 与 `"version"`（等于你装的那一版）。端口从 DSH 窗口地址里取。
 
 ## 装完你会看到
 
@@ -53,7 +53,24 @@ dsh plugin --profile desktop add https://github.com/MUYU46548/dsh-fangcun/releas
   默认**右上角** —— 右下角留给别的挂件（比如那只鲸鱼），插件之间不抢同一块地方；
 - **也能拖**：面板里把「拖动」从**已锁定**点成**可拖动**，然后按住圆点拖到任意一个角，
   松手自动吸到最近的角。**默认锁着**，因为圆点主要是用来点开面板的，手一抖就被拖走比拖不动更烦；
-- 嫌它碍事就点「收起挂件」—— 会缩成一个小圆点，点一下还能回来。
+- 嫌它碍事就点「收起挂件」—— 会缩成一个带「方寸」字样的小胶囊，点一下还能回来。
+
+### 没装方寸本体？它会直接告诉你
+
+插件会看一眼这台机器上有没有方寸桌面版的**装机痕迹**（数据目录、开始菜单/桌面快捷方式、
+安装目录等），只看文件，**不跑进程、不发网络请求**。没有的话：
+
+- 右上角角标写「方寸未安装 · 去下载」，点开面板里有下载地址
+  （[方寸 Releases](https://github.com/MUYU46548/fangcun/releases/latest)，Windows 安装包）；
+- 提示词里那一行现状也会变成「方寸 · 未安装」，agent 会照着说，而不是假装查到了待办。
+
+三种情况分得很清楚，别被一句"未连接"糊弄：
+
+| health 里 | 含义 | 你该做什么 |
+|---|---|---|
+| `fangcun.installed: false` | 这台机器还没有方寸桌面版 | 去上面那个 Releases 页装一个 |
+| `installed: true` + 挂件显示「未连接」 | 装了但没在跑（或管道名不对） | 打开方寸；还不行就看 `FANGCUN_MCP_PIPE` |
+| `installed: true` + 数字正常 | 一切正常 | 不用管 |
 
 ### agent 会被提醒用方寸
 
@@ -62,7 +79,7 @@ dsh plugin --profile desktop add https://github.com/MUYU46548/dsh-fangcun/releas
 - **规则段**：开工先查（`list_tasks`）、收工回写（`update_task` / `move_status`）、
   新问题建卡（`create_task`）、失败要说；并写清**闲聊不用查**，免得每条消息都去翻看板。
 - **一行现状**：`全部项目 · 未完成 114 张 · 截至 18:30`。只有一行，不列标题、不分组 ——
-  那是噪音；细节去方寸看。方寸没开就写「方寸 · 未连接」。
+  那是噪音；细节去方寸看。方寸没开就写「方寸 · 未连接」，本机没装就写「方寸 · 未安装」。
 
 这两样都只读方寸的 MCP 接口；`健康检查` 的 `prompt` 一格会告诉你规则段到底注册上没有。
 

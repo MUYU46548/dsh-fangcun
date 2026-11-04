@@ -74,6 +74,9 @@ test('④ 一行现状的格式：全部项目 / 指定项目 / 未连接 / 未�
   assert.equal(formatStatusLine({ total: 54, at, project: 'sitian' }), 'sitian · 未完成 54 张 · 截至 18:06')
   assert.equal(formatStatusLine({ total: null, at, error: 'ECONNREFUSED' }), '方寸 · 未连接')
   assert.equal(formatStatusLine({ total: null, at }), '方寸 · 未连接', '没数据就说没连上，不显示 0 张')
+  assert.equal(formatStatusLine({ total: null, at, installed: false }), '方寸 · 未安装',
+    '没装本体 ≠ 没连上：前者要请用户去下载')
+  assert.equal(formatStatusLine({ total: 3, at, installed: false }), '方寸 · 未安装', '未安装优先于任何旧数字')
   assert.equal(formatStatusLine(null), '方寸 · 未连接')
 })
 

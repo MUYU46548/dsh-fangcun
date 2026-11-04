@@ -77,6 +77,13 @@
 `/fangcun/api/widget-report`，`health.widget.page.events` 留最近 12 条。桌面端
 `servedByPage` 只能证明"脚本被取走"，证明不了"它跑起来且还在页面上"。
 
+**装机提示**：`lib/detect.js` 判"这台机器装没装方寸本体"，**只读文件**（data-dir.json / Electron userData /
+electron-updater 目录 / 开始菜单与桌面快捷方式 / Program Files 与 Programs 下的同名字目录），
+不跑进程、不发请求。三种状态给三种话术：没装 → 挂件角标写「方寸未安装 · 去下载」并给 Releases 地址、
+一行现状写「方寸 · 未安装」；装了没开 → 「未连接」；装了也在跑只是管道不对 → 查 `FANGCUN_MCP_PIPE`。
+判定结论进 `health.fangcun.installed / installedEvidence / downloadUrl`，也随
+`/fangcun/api/tasks` 的 200 与 503 一起回给挂件（挂件据此决定显示哪一个）。
+
 **提示词**：`apply()` 里 `root.get('systemPrompt')`（拿不到就 3 秒后重试一次，仍没有就写进
 `health.prompt.error`；**不写进 inject**，否则老宿主上插件永不 apply）→
 `section()` 放**静态规则段**（`lib/prompt.js`，不掺动态数据，别破坏提示词缓存）+
@@ -106,6 +113,7 @@
 | 拖动**默认上锁**（解锁才拖得动）、手抖 <6px 算点击、拖完吞掉那一下 click | `widget-dom ⑪` |
 | 挂件不安静消失：根节点被摘掉会**自动补挂**且不重复起轮询 | `widget-dom ⑫` |
 | 页面自证：`boot/mount/probe/removed/error` 进 `health.widget.page`，只收本机 | `widget ⑤` |
+| **没装本体 ≠ 没连上**：装机判定只看文件痕迹、结论进 health、挂件给下载入口 | `detect ①–⑥`、`widget ⑥`、`widget-dom ⑬⑭`、`prompt ④` |
 | 注入行是内联 script、无 `script-src`、不重复推 | `widget ①` |
 | 只读路由：非本机 403、完成/驳回不算未完成 | `widget ③④` |
 | 规则段含四个触发点 + 「闲聊不查」；注册与撤销成对 | `prompt ①②` |
@@ -117,7 +125,7 @@
 ## 5. 本地怎么跑
 
 ```powershell
-npm test        # 48 条，不需要 DSH、不需要真方寸（真起假管道）
+npm test        # 57 条，不需要 DSH、不需要真方寸（真起假管道）
 npm pack        # 验发布包；CI 会把 tgz 解出来真 apply 一次
 ```
 
@@ -145,6 +153,10 @@ curl.exe http://127.0.0.1:<端口>/fangcun/health.json
   有没有 `#fc-todo-widget-style`：没有 = `css()` 忘了 `appendChild`（0.2.0 的错）；
   有 = 被别的样式或 CSP 挡了。这一格 `health` 看不出来，只能看 DOM；
 - `fangcun.dataDir` 为空串 → 没找到方寸数据根，设 `FANGCUN_DATA_DIR`。
+- `fangcun.installed === false` → 本机没有方寸桌面版：`downloadUrl` 会给 Releases 地址，
+  挂件角标是「方寸未安装 · 去下载」，提示词那行写「方寸 · 未安装」。**装了却报 false**：
+  装到自定义目录、又没建开始菜单/桌面快捷方式 —— 设 `FANGCUN_DATA_DIR` 或补个快捷方式即可
+  （判定只读文件，见 `lib/detect.js`）。
 - `prompt.rules === false` → 规则段没注册：`prompt.error` 会写原因（宿主没有 `systemPrompt`
   服务 = 老宿主）。这时挂件与记账照常工作，只是模型收不到"要用方寸"的提示。
 - `prompt.line` 一直是「方寸 · 未连接」→ 后台快照刷不到 `list_tasks`（方寸没开 / 管道名不对）；

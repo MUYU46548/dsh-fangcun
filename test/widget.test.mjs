@@ -155,6 +155,37 @@ test('⑤ 页面自证上报：本机 GET 记账、非本机 403、非 GET 405',
   assert.equal(bad.statusCode, 405)
 })
 
+/**
+ * ⑥ 装机提示：没装本体时，「未连接」和「去下载」必须分开。
+ * 这句话直接决定用户下一步（重装 vs 去开方寸），说错代价很高。
+ */
+test('⑥ 装机判定进 health 与 tasks 响应；没装才给下载地址', async () => {
+  const health = mod.collectHealth()
+  assert.equal(typeof health.fangcun.installed, 'boolean')
+  assert.equal(typeof health.fangcun.installedEvidence, 'string')
+  if (health.fangcun.installed === false) {
+    assert.match(health.fangcun.downloadUrl, /fangcun\/releases/, '没装就要给下载地址')
+  } else {
+    assert.equal(health.fangcun.downloadUrl, '', '装了就别甩下载链接')
+  }
+
+  // 管道不存在 → 503，但装机判定要在响应里（挂件据此显示「去下载」）
+  const prev = process.env.FANGCUN_MCP_PIPE
+  process.env.FANGCUN_MCP_PIPE = uniquePipe()
+  try {
+    const route = mod.ROUTES.find((r) => r.path === '/fangcun/api/tasks')
+    const res = fakeRes()
+    await route.handler({ method: 'GET', socket: { remoteAddress: '127.0.0.1' } }, res)
+    assert.equal(res.statusCode, 503)
+    const body = JSON.parse(res.body)
+    assert.equal(typeof body.installed, 'boolean', '连不上也要说清是不是压根没装')
+    if (body.installed === false) assert.match(body.downloadUrl, /fangcun\/releases/)
+  } finally {
+    if (prev === undefined) delete process.env.FANGCUN_MCP_PIPE
+    else process.env.FANGCUN_MCP_PIPE = prev
+  }
+})
+
 test('④ 只读接口：经 MCP list_tasks 取数；完成/驳回不算未完成，空状态算', async () => {
   const pipePath = uniquePipe()
   const server = net.createServer((socket) => {

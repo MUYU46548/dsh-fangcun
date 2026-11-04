@@ -430,3 +430,39 @@ test('⑫ 根节点被摘掉：自动补挂，且不重复起轮询', async () =
   assert.match(again.text(), /方寸 · 3/)
   assert.equal(fetches, 1, '补挂不该再拉一遍数据（轮询已经在跑）')
 })
+
+/**
+ * ⑬ 没装方寸本体：角标直接说「未安装 · 去下载」，不是含糊的「未连接」。
+ * 哪一种说法决定用户下一步是"装一个"还是"去开一下"，说错就是白折腾。
+ */
+test('⑬ 没装本体：角标/面板给下载入口，不冒充未连接', async () => {
+  const dom = makeDom()
+  const w = runWidget(dom, {
+    reply: {
+      ok: false,
+      error: '方寸未连接：管道不存在',
+      installed: false,
+      downloadUrl: 'https://github.com/MUYU46548/fangcun/releases/latest',
+    },
+  })
+  await w.flush()
+  const root = w.root()
+  assert.match(root.text(), /方寸未安装/, '角标要说未安装')
+  assert.doesNotMatch(root.text(), /方寸未连接/, '别把"没装"说成"没连上"')
+
+  pillOf(w).onclick()
+  const text = w.root().text()
+  assert.match(text, /去下载/)
+  assert.match(text, /github\.com\/MUYU46548\/fangcun\/releases/)
+})
+
+test('⑭ 装了但没开：仍然说未连接，不给下载链接', async () => {
+  const dom = makeDom()
+  const w = runWidget(dom, {
+    reply: { ok: false, error: '方寸未连接：管道不存在', installed: true, downloadUrl: '' },
+  })
+  await w.flush()
+  assert.match(w.root().text(), /方寸未连接/)
+  pillOf(w).onclick()
+  assert.doesNotMatch(w.root().text(), /去下载/, '装了就别劝人再下一遍')
+})

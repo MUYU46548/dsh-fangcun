@@ -62,6 +62,9 @@ assert.ok(widgetJs.includes('data-corner'), '位置要写进 DOM（四角可选�
 assert.ok(widgetJs.includes("var DEFAULT_CORNER = 'tr'"), '默认右上角 —— 右下角是鲸鱼挂件的（事实 14）')
 assert.ok(widgetJs.includes("pointerdown"), '拖拽换角要挂在 pointerdown 上')
 assert.ok(widgetJs.includes('fc-todo-widget:locked'), '拖动要有锁定开关（默认锁着）')
+assert.ok(widgetJs.includes('方寸未安装'), '没装本体要在挂件上直接说，不能含糊成"未连接"')
+assert.ok(widgetJs.includes('downloadUrl'), '下载地址由接口下发，挂件要接住并给入口')
+assert.equal(typeof health.fangcun?.installed, 'boolean', 'health 要报本机到底装没装方寸')
 
 // 用量接线：宿主给的是 Session 对象，落地必须是真 id（不是 [object Object]）
 const emit = listeners.get('session/event')
