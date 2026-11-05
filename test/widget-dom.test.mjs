@@ -16,6 +16,8 @@ import { WIDGET_JS, WIDGET_ROUTE } from '../lib/widget.js'
 function makeDom(options = {}) {
   const byId = new Map()
   const titlebar = Number(options.titlebar) || 0
+  // 自由摆放要按真实尺寸夹进视口：给个"角标 96×28"的假布局（不给就恒 0，夹不住）
+  const box = options.box ? { w: Number(options.box.w) || 0, h: Number(options.box.h) || 0 } : null
 
   class Node {
     constructor(tag) {
@@ -47,6 +49,7 @@ function makeDom(options = {}) {
     }
     addEventListener(name, fn) { (this._listeners[name] ||= []).push(fn) }
     setAttribute(k, v) { this.attrs[k] = String(v); if (k === 'id') this.id = String(v) }
+    removeAttribute(k) { delete this.attrs[k] }
     getAttribute(k) { return Object.prototype.hasOwnProperty.call(this.attrs, k) ? this.attrs[k] : null }
     /** 供测试读：整棵子树的文字 */
     text() {
@@ -59,9 +62,29 @@ function makeDom(options = {}) {
   }
 
   // 只有显式要求时才给布局能力：不然 mount 会排一个 probe 定时器，搅乱 ① 的计数断言
-  if (titlebar > 0) {
+  if (titlebar > 0 || box) {
     Node.prototype.getBoundingClientRect = function () {
-      return { width: 0, height: titlebar, left: 0, top: 0, right: 0, bottom: 0 }
+      // 1px 探针：它量的是 env(titlebar-area-height)，也就是顶部安全区
+      if (this.style && typeof this.style.height === 'string'
+        && this.style.height.indexOf('titlebar-area-height') >= 0) {
+        return { width: 1, height: titlebar, left: 0, top: 0, right: 1, bottom: titlebar }
+      }
+      // 根节点：按内联定位算真实位置（left/top 优先，right/bottom 反向推），
+      // 这样"拖动/换角之后量出来的盒子"跟浏览器里一致
+      if (this.id === 'fc-todo-widget' && box) {
+        const px = (v) => {
+          const n = parseFloat(v)
+          return Number.isFinite(n) ? n : null
+        }
+        const l = px(this.style.left)
+        const t = px(this.style.top)
+        const r = px(this.style.right)
+        const b = px(this.style.bottom)
+        const left = l !== null ? l : (r !== null ? 1280 - r - box.w : 0)
+        const top = t !== null ? t : (b !== null ? 800 - b - box.h : 0)
+        return { width: box.w, height: box.h, left, top, right: left + box.w, bottom: top + box.h }
+      }
+      return { width: 0, height: 0, left: 0, top: 0, right: 0, bottom: 0 }
     }
   }
 
@@ -117,6 +140,7 @@ function makeDom(options = {}) {
     localStorage: {
       getItem: (k) => (storage.has(k) ? storage.get(k) : null),
       setItem: (k, v) => storage.set(k, String(v)),
+      removeItem: (k) => storage.delete(k),
     },
     open() {},
   }
@@ -367,13 +391,14 @@ function drag(w, dom, from, to) {
 }
 
 /**
- * ⑪ 拖拽换角 + 锁定开关。
+ * ⑪ 拖动 = 自由摆放（拖到哪就停哪）+ 锁定开关。
  *
- * 为什么要锁：圆点的主要用途是点开面板，手一抖就被拖走比"拖不动"更烦。
- * 所以默认**锁着**，解锁后才拖得动；拖的过程只跟手（transform），松手才吸角落盘。
+ * 为什么不再吸角（2026-11-05 真机反馈）：同一台机器上的鲸鱼挂件是真拖动，
+ * 方寸却一松手就弹到最近的角 —— 用户只会说"它不听我的"。四角保留成快捷键，
+ * 拖动本身只写 left/top 并落盘：不换角、不弹回。
  */
-test('⑪ 拖拽换角：默认锁着拖不动；解锁后拖到右下；手抖算点击；拖完那一下点击被吞', async () => {
-  const dom = makeDom()
+test('⑪ 拖动自由摆放：默认锁着拖不动；解锁后拖到哪停哪并记住；手抖算点击；拖完那一下点击被吞', async () => {
+  const dom = makeDom({ box: { w: 96, h: 28 } })
   const w = runWidget(dom, { reply: TASKS })
   await w.flush()
   assert.equal(w.root().attrs['data-corner'], 'tr')
@@ -381,7 +406,7 @@ test('⑪ 拖拽换角：默认锁着拖不动；解锁后拖到右下；手抖�
   // 锁着：怎么拖都不动，也不落盘
   drag(w, dom, { x: 200, y: 150 }, { x: 1200, y: 760 })
   assert.equal(w.root().attrs['data-corner'], 'tr', '默认上锁时拖不动')
-  assert.equal(dom.storage.get('fc-todo-widget:corner'), undefined, '锁着时不该落盘')
+  assert.equal(dom.storage.get('fc-todo-widget:pos'), undefined, '锁着时不该落盘')
 
   // 打开面板 → 解锁
   pillOf(w).onclick()
@@ -393,16 +418,56 @@ test('⑪ 拖拽换角：默认锁着拖不动；解锁后拖到右下；手抖�
 
   // 手抖（位移不到 6px）不算拖，照常当点击
   drag(w, dom, { x: 200, y: 150 }, { x: 202, y: 151 })
-  assert.equal(w.root().attrs['data-corner'], 'tr', '手抖不该换角')
+  assert.equal(dom.storage.get('fc-todo-widget:pos'), undefined, '手抖不该落盘')
 
-  // 真拖到右下（视口 1280×800 的右下半边）
-  drag(w, dom, { x: 200, y: 150 }, { x: 1200, y: 760 })
+  // 真拖：右上 (1170,14) 往左下拉 → 停在 (270,514)，不吸角
+  drag(w, dom, { x: 1170, y: 14 }, { x: 270, y: 514 })
   const moved = w.root()
-  assert.equal(moved.attrs['data-corner'], 'br', '落点在右下就吸到右下')
+  assert.equal(dom.storage.get('fc-todo-widget:pos'), '270,514', '松手就落盘成自由坐标')
+  assert.equal(moved.style.left, '270px')
+  assert.equal(moved.style.top, '514px')
+  assert.equal(moved.style.right, '', '自由摆放不再用 right 锚定')
+  assert.equal(moved.style.bottom, '')
+  assert.equal(moved.style.transform, '', '不再靠 transform 跟手，位置就是最终位置')
+  assert.ok(moved.attrs['data-free'], '要标出"这是自由摆放"')
+  assert.equal(moved.attrs['data-corner'], 'bl', '角属性只用来决定面板往哪边开')
+  assert.equal(dom.storage.get('fc-todo-widget:corner'), undefined, '拖动不该再改角')
+
+  // 面板改成绝对定位：开合面板不再把角标顶走
+  const panel = moved.find((n) => n.className === 'fc-panel')[0]
+  assert.equal(panel.style.position, 'absolute')
+  assert.equal(panel.style.bottom, 'calc(100% + 8px)', '下半屏 ⇒ 面板翻到角标上面')
+  assert.equal(panel.style.top, 'auto')
+  assert.equal(panel.style.left, '0', '左半屏 ⇒ 面板贴左')
+  assert.equal(panel.style.right, 'auto')
+
+  // 拖出屏幕：夹回可见区，不许拖丢
+  drag(w, dom, { x: 270, y: 514 }, { x: 5000, y: 5000 })
+  assert.equal(dom.storage.get('fc-todo-widget:pos'), '1184,772', '夹到视口内（1280-96 / 800-28）')
+  assert.equal(w.root().style.left, '1184px')
+
+  // 四角按钮仍是快捷键：点了回角锚定，并清掉自由坐标
+  const br = w.root().find((n) => /fc-posbtn/.test(n.className) && /右下/.test(n.textContent))[0]
+  assert.ok(br, '面板里要保留四角按钮')
+  br.onclick()
+  assert.equal(dom.storage.get('fc-todo-widget:pos'), undefined, '点四角要清掉自由坐标')
   assert.equal(dom.storage.get('fc-todo-widget:corner'), 'br')
-  assert.equal(moved.style.bottom, '14px')
-  assert.equal(moved.style.right, '14px')
-  assert.equal(moved.style.transform, '', '松手要清掉跟手的偏移')
+  assert.equal(w.root().style.right, '14px')
+  assert.equal(w.root().style.left, '')
+
+  // 刷新页面：自由坐标还在（脏值当没存，回默认角）
+  const dom2 = makeDom({ box: { w: 96, h: 28 } })
+  dom2.storage.set('fc-todo-widget:pos', '870,214')
+  const w2 = runWidget(dom2, { reply: TASKS })
+  await w2.flush()
+  assert.equal(w2.root().style.left, '870px')
+  assert.equal(w2.root().style.top, '214px')
+
+  const dom3 = makeDom({ box: { w: 96, h: 28 } })
+  dom3.storage.set('fc-todo-widget:pos', '乱七八糟')
+  const w3 = runWidget(dom3, { reply: TASKS })
+  await w3.flush()
+  assert.equal(w3.root().attrs['data-corner'], 'tr', '认不出的坐标不许拿去摆位置')
 
   // 松手后浏览器补发的 click 不能顺手把面板也开了
   const openBefore = /fc-open/.test(moved.className)
