@@ -63,6 +63,8 @@
 **用量上报**：`session/event` → `UsageLedger.onSessionEvent`（按 `(sessionId, turn)` 聚合
 `assistant/message`）→ `turn/end` 结算 → 本地 `outbox.jsonl` → 管道 MCP `usage_report` →
 已发键落 `sent.jsonl`。方寸没开就攒在 outbox，60 秒重试。会话销毁时补结算半轮。
+结算时 `note` 会带**这一轮在办那张卡的卡号**（`card=<id>`，来自 `lib/cards.js`）——
+方寸账本可按卡归因 token。卡号放不进 120 字上限就整段不带，**绝不写半截 id**。
 
 **待办挂件**：`apply()` 最前面订阅 `webserver/index-inject` → 推一行内联 script →
 浏览器加载 `/fangcun/widget.js` → 拉 `/fangcun/api/tasks` → 经同一根管道 `list_tasks`（10 秒缓存）。
@@ -100,7 +102,23 @@ electron-updater 目录 / 开始菜单与桌面快捷方式 / Program Files 与 
 
 **自证**：同一条 `session/event` 订阅里，`tool/call` 且名字以 `mcp__fangcun__` 开头 →
 追加 `$DSH_HOME/dsh-fangcun/tools.jsonl`（只记时间/会话/轮次/工具名，不记参数；上限 500）。
-契约 ②⑦–⑩ 的判据从这里读，不靠模型自述。
+另外 **每轮收尾一行** 进 `turns.jsonl`（上限 500），记的是**顺序**：第一次工具是谁、方寸读在第几位、
+改文件在第几位、回写在第几位、shell 在第几位。`health.proof.turns` 直接给出
+`turns / withEdit / readBeforeEdit / wroteBack / readOnly / withShell` ——
+契约 ②⑦（先查后改）、②⑧（改了就回写）、②⑩（只查不干的可疑轮次）不用再人翻日志。
+判定口径在 `lib/proof.js` 的 `verdictOf`，**历史行与刚收尾的一行走同一套**（重启后数字不漂）。
+
+**卡号追踪**（`lib/cards.js`）：只从 `tool/call` 的 `arguments.id` 里、且只对
+`get_task / update_task / move_status / delete_task / plan_get` 这五个工具取卡号
+（`get_log/update_log` 的 `id` 是日志号，**不是卡号**，别混）。
+用在两处：`usage_report` 的 `note` 里 `card=<id>`（按卡归因 token）；
+`/fangcun/api/tasks` 的 `focus` 字段（挂件顶部「本次在办」，标题从这次 `list_tasks` 结果里匹配）。
+**参数里其余字段一个都不读** —— 这是与 `proof.js` 同一条隐私边界（`cards ①` 钉着）。
+
+**挂件的口径**（REV-005）：`/fangcun/api/tasks` 回 `total / counts / focus / scope / items`。
+`counts.doing` = status「进行中」的条数，`counts.waiting` = 「待验收」+「待审批」；
+`items` 仍是 `list_tasks` 的前 20 条、**不重排**（`list_tasks` 不返回时间戳，排序只能靠猜）。
+`scope` 跟 `FANGCUN_PROJECT` 走，与一行现状同一个项目口径（以前挂件永远全部项目，两边会各说各的）。
 
 ## 4. 关键不变量 ↔ 测试
 
@@ -130,13 +148,17 @@ electron-updater 目录 / 开始菜单与桌面快捷方式 / Program Files 与 
 | 规则段含四个触发点 + 「闲聊不查」；注册与撤销成对 | `prompt ①②` |
 | 一行现状：格式对、未完成口径对、读快照不碰管道、方寸没开=未连接、provider 不抛 | `prompt ④⑤⑥⑦③` |
 | 自证只记方寸工具、不记参数、脏 id 不记、有上限 | `prompt ⑧⑨` |
+| **逐轮顺序可证**：先查后改 / 改了没回写 / 只查不干，各自数得出来；判定历史与新增同一口径（重启不漂）；`turn/end` 没带轮次时收最新一轮；半轮在会话销毁时补结算 | `cards ③③b③c` |
+| **卡号只取 `arguments.id`**：日志 id 不算卡号、非白名单工具不取、脏值不取；一轮去重、焦点有 TTL、会话销毁即忘、轮次有上限 | `cards ①②②b` |
+| **按卡记账**：note 放得下才带 `card=`，放不下整段不带（不写半截 id），原有 `cache_read` 口径不被挤掉，note ≤ 120 | `cards ④` |
+| **挂件口径照方寸的 status 数**（在办/待拍板），`focus` 只配可见列表里的标题，没有就只给卡号 | `cards ⑤`、`widget-dom ⑱⑱b` |
 | apply 真的注册了提示词；没有 `systemPrompt` 服务时不假装成功、其它功能照旧；方寸工具调用落 `tools.jsonl` | `plugin ⑧⑨` |
 | health 只报能自证的事实、不泄凭据 | `plugin ⑤` |
 
 ## 5. 本地怎么跑
 
 ```powershell
-npm test        # 60 条，不需要 DSH、不需要真方寸（真起假管道）
+npm test        # 70 条，不需要 DSH、不需要真方寸（真起假管道）
 npm pack        # 验发布包；CI 会把 tgz 解出来真 apply 一次
 ```
 
@@ -177,6 +199,16 @@ curl.exe http://127.0.0.1:<端口>/fangcun/health.json
   它每 60 秒自己重试，不会卡住模型调用。
 - `proof.rows` 不涨 → 没有任何 `mcp__fangcun__*` 调用（真没调），或者 `session/event` 没收到
   （那就先看 `usage` 那一栏）。
+- **`proof.turns`**（2026-11-05 起）是"联动到底发生了没有"的数字，几个数要一起看：
+  `withEdit` = 真的改过文件的轮次；`readBeforeEdit` = 其中**先查了方寸**的（②7）；
+  `wroteBack` = 动过方寸写工具的（②8）；`readOnly` = 只查了方寸、别的没动（②10 的可疑轮次）。
+  `withEdit > 0 而 readBeforeEdit == 0` = 规则段没生效或模型没照做（先看 `prompt.rules`）。
+  `open > 0` 且一直不降 = `turn/end` 没收到（事件链断了）。
+- **`cards.lastCardId` 一直空** → 没有带 `id` 的方寸工具调用（`get_task/update_task/move_status/...`），
+  或宿主把 `tool/call` 的 `arguments` 换成了别的形状（`cards ①` 会红）。
+  它空着时挂件不会显示「本次在办」，`usage` 的 note 也不会带 `card=`。
+- `usage` 里某轮的 note **没有** `card=`：要么那轮没动卡，要么卡号太长（note 上限 120 字）——
+  `lib/usage.js` 的 `noteFor` 宁可整段不带，也不写半截 id。
 
 环境变量：`FANGCUN_DATA_DIR`（数据根）、`FANGCUN_MCP_PIPE`（管道）、
 `FANGCUN_PROJECT`（提示词那行只统计某个项目）、`DSH_HOME`（默认 `~/.dsh`）。
@@ -219,6 +251,11 @@ CI 会：校验 tag 与 `package.json.version` 一致 → `npm test` → `npm pa
    再接着（2026-11-05）是"能拖了，但松手自动吸附，不能放在想要的位置；同一台机器上的鲸鱼挂件能真拖"：
    已改成**自由摆放**（`fc-todo-widget:pos` + `widget-dom ⑪`），四角按钮降级为快捷键。
    **待真机确认**：解锁后拖到任意位置 → 松手就停在那、刷新还在、四角按钮仍能一键摆位。
+6. **REV-005 的三件事（2026-11-05）只在单测里绿过**：逐轮度量（`health.proof.turns`）、
+   卡号追踪（`cards.lastCardId`、`usage` note 里的 `card=`）、挂件「在办 / 待拍板 / 本次在办」。
+   真机要重启后按三个点复核；`proof.turns` 从这一版装上才开始积累，头一天数字小是正常的。
+7. **方寸侧还没确认 `usage_report` 的 `note` 会被落盘/可查**：`card=<卡号>` 已经发过去了，
+   但"方寸账本能不能按卡汇总"要方寸那边给出结论（查不到就等于白带，不许在 README 里写成已实现）。
 
 ## 9. 文档地图
 

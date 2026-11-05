@@ -220,7 +220,7 @@ test('③ 展开状态记忆：重开页面还在展开', async () => {
   assert.match(w.root().className, /fc-open/, '上次展开的，这次应当还是展开')
 })
 
-test('④ 点条目只复制 id（只读动作），不写方寸', async () => {
+test('④ 点条目复制「卡号 + 标题」（只读动作），不写方寸', async () => {
   const dom = makeDom()
   const w = runWidget(dom, { reply: TASKS })
   await w.flush()
@@ -229,7 +229,9 @@ test('④ 点条目只复制 id（只读动作），不写方寸', async () => {
   const row = w.root().find((n) => n.className === 'fc-row')[0]
   assert.ok(row, '要列出行')
   row.onclick()
-  assert.match(w.root().text(), /id：t1|已复制 t1/, '点了要把 id 给出来')
+  // 2026-11-05：点一下要给的是"能直接粘进对话"的东西 —— 卡号 + 标题，不是干巴巴一个 id
+  assert.match(w.root().text(), /t1 要做的/, '复制内容 = 卡号 + 标题')
+  assert.match(w.root().text(), /内容：|已复制/, '得告诉用户复制了什么')
 })
 
 test('⑤ 方寸没连上：显示"方寸未连接"且点一下会重试', async () => {
@@ -600,4 +602,52 @@ test('⑰ 锁着时硬拖：不动，但会说明"拖动已锁定"', async () =>
   drag(w, dom, { x: 200, y: 150 }, { x: 1200, y: 760 })
   assert.equal(w.root().attrs['data-corner'], 'tr', '锁着就是不许动')
   assert.match(w.root().text(), /拖动已锁定/, '要解释为什么拖不动')
+})
+
+/**
+ * ⑱ 挂件说人话（2026-11-05 用户："挂件本身展示的信息倒是没多大意义"）。
+ *
+ * 补的都是**方寸自己的数据**，不是插件另立的口径：
+ *  · 角标：在办（status=进行中）、待拍板（status=待验收/待审批）—— 宿主数好传过来；
+ *  · 面板顶部：本次在办（来自 tool/call 里白名单取到的卡号，见 lib/cards.js）；
+ *  · 点条目/点"本次在办"复制的是「卡号 + 标题」，粘进对话就能开工。
+ */
+test('⑱ 角标补「在办/待拍板」；面板顶部「本次在办」可复制卡号+标题', async () => {
+  const dom = makeDom()
+  const w = runWidget(dom, {
+    reply: {
+      ...TASKS,
+      total: 12,
+      counts: { doing: 3, waiting: 2 },
+      scope: 'dsh-fangcun',
+      focus: { id: 't2', title: '在做', status: '进行中', at: '2026-11-05T01:00:00.000Z' },
+    },
+  })
+  await w.flush()
+  const text = w.root().text()
+  assert.match(text, /方寸 · 12/)
+  assert.match(text, /在办 3/, '角标要说"有几张在办"')
+  assert.match(text, /待拍板 2/, '角标要说"有几张等我拍板"')
+
+  pillOf(w).onclick()
+  const panel = w.root().find((n) => n.className === 'fc-panel')[0]
+  assert.match(panel.text(), /本次在办：在做/, '面板顶部要给"我手上这张"')
+  assert.match(panel.text(), /dsh-fangcun · 未完成 12/, '数字要标清楚是哪个项目')
+
+  const focusRow = panel.find((n) => /fc-focus/.test(n.className))[0]
+  assert.ok(focusRow, '本次在办单独一行（有底色）')
+  focusRow.onclick()
+  assert.match(w.root().text(), /t2 在做/, '点它复制卡号 + 标题')
+})
+
+/** ⑱b 没有 focus / 计数为 0：退回老样子，不显示 0、也不编造一行"本次在办" */
+test('⑱b 没有 focus、计数为 0 时不显示尾巴，也不编造"本次在办"', async () => {
+  const dom = makeDom()
+  const w = runWidget(dom, { reply: { ...TASKS, counts: { doing: 0, waiting: 0 }, scope: '全部项目' } })
+  await w.flush()
+  assert.match(w.root().text(), /方寸 · 3/, '没有在办/待拍板就不加尾巴')
+  assert.doesNotMatch(w.root().text(), /在办 0|待拍板 0/, '0 不显示')
+  pillOf(w).onclick()
+  assert.doesNotMatch(w.root().text(), /本次在办/, '没有 focus 就不出这一行')
+  assert.match(w.root().text(), /全部项目 · 未完成 3/)
 })
