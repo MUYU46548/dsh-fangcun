@@ -23,21 +23,26 @@ dsh-fangcun 是 [方寸（tegula）](https://github.com/MUYU46548/fangcun) 任�
 **前提**：Windows 上的 DSH 桌面版（0.2.0-rc.2 或更新），并且方寸正在运行（插件靠它的命名管道取数据）。
 
 1. 打开 DSH 的「插件 → 添加插件」。
-2. 在「包名或地址」里填入下方地址，「安装源」保持默认。
+2. 在「包名或地址」里填入 `dsh-fangcun@0.3.0`，「安装源」保持默认。
 3. 安装完成后**含托盘完全退出 DSH 再打开** —— 插件不进热更，不重启就不会加载。
 
+也可以走 GitHub Release（离线或 npm 不可用时）：
+
 ```text
-https://github.com/MUYU46548/dsh-fangcun/releases/download/v0.2.0/dsh-fangcun-0.2.0.tgz
+https://github.com/MUYU46548/dsh-fangcun/releases/download/v0.3.0/dsh-fangcun-0.3.0.tgz
 ```
 
-也可以下载 [同目录的发布包](https://github.com/MUYU46548/dsh-fangcun/releases) 后用本地路径安装，或用命令行：
+或者用命令行（两种源任选）：
 
 ```powershell
-dsh plugin --profile desktop add https://github.com/MUYU46548/dsh-fangcun/releases/download/v0.2.0/dsh-fangcun-0.2.0.tgz
+dsh plugin --profile desktop add dsh-fangcun@0.3.0
+# 或
+dsh plugin --profile desktop add https://github.com/MUYU46548/dsh-fangcun/releases/download/v0.3.0/dsh-fangcun-0.3.0.tgz
 ```
 
 > 建议把安装和更新都交给 DSH 里的 Agent 处理：它自己能装、能查 health、能判断装没装好。
 > 插件更新由 `dsh-plugin-updates` 负责 —— 只要本仓库发了新的 Release，它就能认出来，不需要你再手工下载。
+> npm 与 GitHub Release 是**同一份代码的两条分发通道**，不是两个版本。
 
 **装完怎么确认？** 浏览器打开 `http://127.0.0.1:<DSH 端口>/fangcun/health.json`，应当看到 `"ok": true` 与 `"version"`（等于你装的那一版）。端口从 DSH 窗口地址里取。
 
@@ -45,7 +50,7 @@ dsh plugin --profile desktop add https://github.com/MUYU46548/dsh-fangcun/releas
 
 ### 右上角多了一个小圆点（四个角随便挑）
 
-点开就是方寸里**没做完**的卡（完成和驳回的不算，状态空着算没做完）。点条目复制「卡号 + 标题」，粘进对话就能开工；点「打开看板」直接去方寸本体看。
+点开就是方寸里**没做完**的卡（完成和驳回的不算，状态空着算没做完）。点条目复制「卡号 + 标题」，粘进对话就能开工；点「打开看板」直接去方寸本体看（方寸的看板服务没起时，这个入口不会出现，避免给出打不开的地址）。
 
 - **角标会说人话**：`方寸 · 130 · 在办 3 · 待拍板 2` —— 在办是方寸里状态「进行中」的卡，
   待拍板是「待验收 / 待审批」（在等你点头的）。两个数都是**方寸自己写的状态**数出来的，插件不另判优先级；

@@ -50,6 +50,7 @@ jobs:
           for f in package/package.json package/lib/index.js package/cordis.patch.yml package/README.md package/LICENSE \
                    package/lib/usage.js package/lib/widget.js package/lib/mcp-pipe.js package/icon.svg \
                    package/lib/status.js package/lib/proof.js package/lib/prompt.js \
+                   package/lib/cards.js package/lib/detect.js \
                    package/locale/en.json package/locale/zh.json; do
             grep -qx "$f" /tmp/list.txt || { echo "::error::发布包缺 $f"; exit 1; }
           done

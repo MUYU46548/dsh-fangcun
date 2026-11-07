@@ -56,5 +56,8 @@
     "test": "node --test test/plugin.test.mjs test/usage.test.mjs test/widget.test.mjs test/widget-dom.test.mjs test/prompt.test.mjs test/detect.test.mjs test/cards.test.mjs"
   },
   "author": "MUYU46548",
-  "license": "MIT"
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  }
 }

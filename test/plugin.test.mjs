@@ -17,6 +17,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { spawnSync } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -104,6 +105,34 @@ test('⑤ health 只说能自证的事实：认不出数据根就空串', () => 
     // 凭据类字段一个都不许出现在 health 里
     const s = JSON.stringify({ plugin: h.plugin, fangcun: h.fangcun, contract: h.contract })
     assert.doesNotMatch(s, /api[_-]?key|password|secret|bearer|sk-[A-Za-z0-9]{8}/i)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('⑩ 看板链接只指向活着的方寸看板：端口文件的 PID 不在就不给链接', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fc-board-'))
+  try {
+    const env = { FANGCUN_DATA_DIR: dir, APPDATA: path.join(dir, 'nope') }
+
+    // 端口 + 活着的 PID（自己）→ 给链接
+    fs.writeFileSync(path.join(dir, '.tegula-port'), '8791\n' + process.pid + '\n1792676596\n')
+    assert.equal(mod.resolveBoardUrl(env), 'http://127.0.0.1:8791')
+
+    // 端口 + 已经退出的 PID → 不给。2026-11-07 真机：文件停在 10 月 22 日，
+    // 写它的进程早没了，挂件却把「打开看板」指向一个打不开的地址。
+    const dead = spawnSync(process.execPath, ['-e', '0'])
+    assert.equal(typeof dead.pid, 'number', '拿不到一个已退出的 PID，测试无法继续')
+    fs.writeFileSync(path.join(dir, '.tegula-port'), '8791\n' + dead.pid + '\n1792676596\n')
+    assert.equal(mod.resolveBoardUrl(env), '')
+
+    // 只有端口（旧格式）：没有判活证据，保留旧行为
+    fs.writeFileSync(path.join(dir, '.tegula-port'), '8791\n')
+    assert.equal(mod.resolveBoardUrl(env), 'http://127.0.0.1:8791')
+
+    // 脏值不猜
+    fs.writeFileSync(path.join(dir, '.tegula-port'), 'not-a-port\n')
+    assert.equal(mod.resolveBoardUrl(env), '')
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }

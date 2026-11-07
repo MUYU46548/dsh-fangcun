@@ -81,6 +81,8 @@
 用户只会说"挂件没了"）。
 **右键**出菜单（解锁拖动 / 四角摆位 / 刷新 / 打开看板 / 收起），锁着时硬拖会 toast 一句
 "拖动已锁定：右键菜单里解锁" —— 用户反馈过"只能左键"，不给解释就等于坏了。
+**看板链接**读数据根的 `.tegula-port`，但**要先验 PID**：文件是「端口/PID/时间戳」三行，
+PID 不在就返回空串，挂件不显示「打开看板」——2026-11-07 真机踩到 10 月 22 日的死端口 8791。
 
 **挂件自证**：注入行一执行就报 `boot`（页面地址 / readyState），`mount()` 报 `mount`，
 800ms 后报 `probe`（量出来的位置、命中的是不是自己），根节点被谁摘掉报 `removed` 并**自动补挂**；
@@ -153,12 +155,13 @@ electron-updater 目录 / 开始菜单与桌面快捷方式 / Program Files 与 
 | **按卡记账**：note 放得下才带 `card=`，放不下整段不带（不写半截 id），原有 `cache_read` 口径不被挤掉，note ≤ 120 | `cards ④` |
 | **挂件口径照方寸的 status 数**（在办/待拍板），`focus` 只配可见列表里的标题，没有就只给卡号 | `cards ⑤`、`widget-dom ⑱⑱b` |
 | apply 真的注册了提示词；没有 `systemPrompt` 服务时不假装成功、其它功能照旧；方寸工具调用落 `tools.jsonl` | `plugin ⑧⑨` |
+| **看板链接只指向活着的进程**：`.tegula-port` 有 PID 且 PID 已退出 → 不给链接；旧格式只有端口 → 保留旧行为 | `plugin ⑩` |
 | health 只报能自证的事实、不泄凭据 | `plugin ⑤` |
 
 ## 5. 本地怎么跑
 
 ```powershell
-npm test        # 70 条，不需要 DSH、不需要真方寸（真起假管道）
+npm test        # 71 条，不需要 DSH、不需要真方寸（真起假管道）
 npm pack        # 验发布包；CI 会把 tgz 解出来真 apply 一次
 ```
 
@@ -225,10 +228,14 @@ CI 会：校验 tag 与 `package.json.version` 一致 → `npm test` → `npm pa
 - tag 与版本不一致是最常见的翻车点：更新器会认为"没更新"；
 - 发完要**复核资产**，不许只看"工作流是绿的"：
   `gh release view v<version> --json tagName,isDraft,assets`；
-- **分发只走 GitHub Release**（`.tgz` + `SHA256SUMS.txt`）。npm 不做了 ——
-  账号注册这条路走不通，代价与收益不成比例（契约 REV-004）。
-  CI 里那步 npm 用 `NPM_TOKEN` 门控，没有 secret 就自动跳过，**不要**去补这个 secret。
-  README 里的安装地址必须是 Release 的 `.tgz`，不要写成 `包名@版本`（那需要 npm）。
+  同时 `npm view dsh-fangcun version` 核对 npm 那一路真的发布了；
+- **双通道分发**（契约 REV-006）：npm 公开包 `dsh-fangcun` + GitHub Release
+  （`.tgz` + `SHA256SUMS.txt`）。CI 由 tag 触发，两条通道发同一份代码；
+- CI 的 npm 步骤由仓库 secret `NPM_TOKEN` 驱动（2026-11-07 已配好，token 来自用户的
+  系统环境变量，npm 账号 `muyu46548`）。**secret 不落本地 `.npmrc`**；
+  改了 token 就去 GitHub 仓库设置里替换，不要写进仓库或 README；
+- README 的安装写法：`dsh-fangcun@<版本>`（npm），Release 的 `.tgz` 作为离线/兜底。
+  不要再写"npm 不做"——那是 REV-004 的旧结论，已被 REV-006 推翻。
 
 ## 7. 维护检查表
 
@@ -256,6 +263,10 @@ CI 会：校验 tag 与 `package.json.version` 一致 → `npm test` → `npm pa
    真机要重启后按三个点复核；`proof.turns` 从这一版装上才开始积累，头一天数字小是正常的。
 7. **方寸侧还没确认 `usage_report` 的 `note` 会被落盘/可查**：`card=<卡号>` 已经发过去了，
    但"方寸账本能不能按卡汇总"要方寸那边给出结论（查不到就等于白带，不许在 README 里写成已实现）。
+8. **看板死链（2026-11-07）**：本机 `.tegula-port` 是 2026-10-22 的 8791，PID 早退出；
+   已改成"PID 不在就不给链接"（`plugin ⑩`）。真机重启后应看到：挂件面板不再出现「打开看板」，
+   直到方寸的看板服务真的起来。挂件开合/点看板现在会写 `health.widget.page` 的
+   `panel` / `board` 事件，用来分辨"点击没进来"和"链接打不开"。
 
 ## 9. 文档地图
 
