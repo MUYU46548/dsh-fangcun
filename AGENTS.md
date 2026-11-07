@@ -238,6 +238,12 @@ runner 是 **`windows-latest` + Git Bash**：插件只支持 Windows，`detect` 
   改了 token 就去 GitHub 仓库设置里替换，不要写进仓库或 README；
 - README 的安装写法：`dsh-fangcun@<版本>`（npm），Release 的 `.tgz` 作为离线/兜底。
   不要再写"npm 不做"——那是 REV-004 的旧结论，已被 REV-006 推翻。
+- **新包第一次发布有个"占位期"**（2026-11-07 实测）：registry 先出现
+  `0.0.0-stage`（description 是 "Temporary package placeholder for staged publishing"），
+  真正的 `0.3.0` 约 5 分钟后才可访问，`latest` 随后自动指过去。
+  **不要因为 404 就重复 publish**，先轮询 `https://registry.npmjs.org/dsh-fangcun/<version>`；
+  `0.0.0-stage` 是 npm 的名字预留，**不要 unpublish**。本机 npm 10.9.8 没有 `npm stage` 子命令，
+  需要时用 `npx npm@latest stage ...`（12.x 才有）。
 
 ## 7. 维护检查表
 
