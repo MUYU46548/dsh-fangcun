@@ -14,7 +14,12 @@ permissions:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    # 插件只支持 Windows（方寸桌面版、命名管道、detect 的路径断言都是 Windows 口径）。
+    # 2026-11-07：ubuntu 上 3 条 detect 测试因为 `C:\...` 路径断言失败，改成真机同平台。
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
     env:
       # 没有这个 secret 时 npm 那一步自动跳过（v1 只发 Release）
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -46,24 +51,24 @@ jobs:
         run: |
           set -eu
           tgz="$(ls dsh-fangcun-*.tgz)"
-          tar -tzf "$tgz" > /tmp/list.txt
+          tar -tzf "$tgz" > .pkg-list.txt
           for f in package/package.json package/lib/index.js package/cordis.patch.yml package/README.md package/LICENSE \
                    package/lib/usage.js package/lib/widget.js package/lib/mcp-pipe.js package/icon.svg \
                    package/lib/status.js package/lib/proof.js package/lib/prompt.js \
                    package/lib/cards.js package/lib/detect.js \
                    package/locale/en.json package/locale/zh.json; do
-            grep -qx "$f" /tmp/list.txt || { echo "::error::发布包缺 $f"; exit 1; }
+            grep -qx "$f" .pkg-list.txt || { echo "::error::发布包缺 $f"; exit 1; }
           done
-          cat /tmp/list.txt
+          cat .pkg-list.txt
 
       # 上面验的是"文件在不在"，这一步验"解出来跑不跑得起来"——
       # 用户装的是 tgz，不是工作区源码，两者差一层打包。
       - name: 发布包冒烟（解包后真的 apply 一次）
         run: |
           set -eu
-          rm -rf /tmp/pkg && mkdir -p /tmp/pkg
-          tar -xzf dsh-fangcun-*.tgz -C /tmp/pkg
-          node test/smoke-packed.mjs /tmp/pkg/package
+          rm -rf .pkg && mkdir -p .pkg
+          tar -xzf dsh-fangcun-*.tgz -C .pkg
+          node test/smoke-packed.mjs .pkg/package
 
       - name: 生成校验和
         run: |

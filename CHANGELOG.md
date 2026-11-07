@@ -11,6 +11,8 @@
   CI 由 tag 触发，两处是**同一份代码**；安装可写 `dsh-fangcun@0.3.0`，离线仍可用 Release 包。
 - 推翻 REV-004 的"npm 不做"：用户已注册 npm 账号（`muyu46548`），token 存在系统环境变量，
   仓库 secret `NPM_TOKEN` 已配置。
+- CI runner 改成 `windows-latest`：插件只支持 Windows，`detect` 测试断言 `C:\...` 路径，
+  在 ubuntu 上会假红（2026-11-07 首跑就踩到）。
 
 ### 看板链接与挂件诊断（2026-11-07 真机）
 

@@ -224,6 +224,8 @@ git tag v<version> && git push origin v<version>
 
 CI 会：校验 tag 与 `package.json.version` 一致 → `npm test` → `npm pack` →
 验清单 → **解包真 apply 一次**（`test/smoke-packed.mjs`）→ 出 `SHA256SUMS.txt` → 建 Release。
+runner 是 **`windows-latest` + Git Bash**：插件只支持 Windows，`detect` 测试按 Windows 路径断言；
+换成 ubuntu 会在 3 条 detect 用例上假红（2026-11-07 首跑踩过）。
 
 - tag 与版本不一致是最常见的翻车点：更新器会认为"没更新"；
 - 发完要**复核资产**，不许只看"工作流是绿的"：
