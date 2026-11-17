@@ -78,6 +78,7 @@
 | 39 | ⚠ **往会话日志 `session.append('user/message')` 不会叫醒 agent**：轮次由 Agent 的 inbox 驱动（`agent.followup(message)`）；只 append 的结果是"历史里多了一句话"，模型永远不跑。而且手写的 user 消息**必须有 `id`（非空）与 `source.kind`（非空）**，否则 `assertMessageEventShape` 判它是坏事件。派单那条管子此前就是踩这个，会话建出来是空的 | `plugin ⑩`（2026-11-17 真机探针 + agent-loop `followup` 原文） |
 | 40 | ⚠ **`agents.create` 的三个坑**：① **没有 `title` 字段**（`CreateAgentOptions` 只有 `sessionId/meta/agentOptions/setup/signal` 等，传了静默丢弃）；② **不传 `meta.cwd` 就落在 `sessions/_no-cwd/`**（真机实证），等于派进真空；③ **不传 `agentOptions` 就没有 provider/model**，第一轮抛 `agent "…" has no provider/model` —— 用户看到的是"会话开出来了，但说话不回"。正解：`cwd` 用绝对路径 + `agentOptions` 取 `agentDefaultModel.currentSelection()`（与 GUI 新建会话同源） | 2026-11-17 真机：探针会话落在 `_no-cwd` 且零事件；`agent-loop:686` 原文 |
 | 41 | **会话要"落盘"得自己 `sessions.flush(session)`**：`session.append`/`followup` 只进内存，落盘是 `session/flush` 的活（`dsh-schedule` 每发一条都 await 一次）。探针会话在磁盘上只有一行头、零事件就是这个原因 | `plugin ⑩`、`dsh-schedule` `send()` 原文 |
+| 42 | ✅ **改完不必重启 DSH**：本机 `dsh-hmr` 是 active，**Plugin Manager 的一次操作会触发重组**，而重组"也替换**加载文件在磁盘上变过的插件**——包含 `node_modules` 下装的和 **`link:` 包的目标**"。所以 `plugin_manager set_plugin(enabled:true)` 一次（`target=include:dsh-fangcun`）就能让 0.6.4→0.6.5 在**运行中的进程里**生效（`health.plugin.version` 当场变 0.6.5，`compat.checkedAt` 刷新）。⚠ 前提是新代码**能被干净 import**（先 `node -e "import('./lib/index.js')"` 验一遍）：加载失败会把旧实例停掉并标 `failed`，那才是真的坏 | `dsh-hmr` README 第 50 行原文 + 2026-11-17 18:58 实测 |
 
 ## 3. 四条链路（改之前先看懂数据怎么走）
 
@@ -219,12 +220,15 @@ npm test        # 107 条，不需要 DSH、不需要真方寸（真起假管道
 npm pack        # 验发布包；CI 会把 tgz 解出来真 apply 一次
 ```
 
-装进 DSH（开发态用 `link:`，改完**重启**才生效 —— 插件不进热更）：
+装进 DSH（开发态用 `link:`）。**改完不一定要重启**（事实 42）：本机 `dsh-hmr` active 时，
+一次 `plugin_manager set_plugin(enabled:true)`（`target=include:dsh-fangcun`）会触发重组，
+把 `link:` 目标里**磁盘上变过的文件**换进来 —— 2026-11-17 实测 0.6.4→0.6.5 在运行中的进程里生效。
+**先验 `node -e "import('./lib/index.js')"`**：import 不干净会被停掉并标 `failed`。
+真正需要重启的只剩：改了 `package.json` 的 `dsh` 清单/`engines`、或者 HMR 被关掉时。
 
 ```powershell
 dsh plugin --profile desktop add link:<本目录绝对路径>
-# 桌面端要含托盘完全退出再开
-curl.exe http://127.0.0.1:<端口>/fangcun/health.json
+curl.exe http://127.0.0.1:<端口>/fangcun/health.json   # 先看 version 是不是新的一版
 ```
 
 排查用 `health`，别看界面：
@@ -351,18 +355,17 @@ runner 是 **`windows-latest` + Git Bash**：插件只支持 Windows，`detect` 
    现在 `scripts/check-packed-schema.mjs` 是**拿宿主 app.asar 里的真校验器**判的，
    而且**对打包产物判**（不是工作区）。发版前必跑；CI 里也已加一步。
 
-12. **派单管子（2026-11-17 0.6.5）**：消费端四个错已修（事实 39/40/41）。
-   **真机复核还没做** —— 插件不进热更，要**重启 DSH** 才生效，重启后按这张单子验：
-   ① 方寸里点「派给 DSH」→ DSH 侧边栏**真的多一个会话**，名字是 `方寸派单 · 开工|规划 · <项目>`；
-   ② 那个会话的**目录是项目仓库**（不是 `_no-cwd`）；
-   ③ 第一条消息就是上下文包，而且**模型会自己开口**（不是只有一句躺在历史里）；
-   ④ `health.dispatch.lastOk=true` 且 `lastSessionId` 非空；
-   ⑤ `~/.dsh/sessions/<项目目录>/fangcun-dispatch-*/session.v4.jsonl.zstd` 里**有 user/message 事件**
-   （不是只有一行头）。
-   ⚠ 探针那份旧派单会话（`sessions/_no-cwd/fangcun-dispatch-mwkk2zww-3fsoidrm`，零事件）是**修复前的证据**，
-   可以删。另外**按钮本来就在**：本机安装包 `E:\Software\fangcun-desktop\resources\app.asar` 里
+12. ✅ **派单管子（0.6.5，2026-11-17 18:58 真机验通，没重启 DSH）**：消费端四个错已修（事实 39/40/41），
+   用 `plugin_manager` 触发重组换上新代码后，放一份派单 → 12 秒内：
+   `health.dispatch.lastOk=true`、会话落在 `sessions/--E-CODE-CangKu-dsh-fangcun--/fangcun-dispatch-…`
+   （**项目仓库，不是 `_no-cwd`**，头里 `"cwd":"E:\\CODE\\CangKu\\dsh-fangcun"`）；
+   会话事件序列 `agent/inbox/spliced → turn/start → step/start → system/message → user/message(上下文包,
+   source.kind=user) → request/header → assistant/message → turn/end(completed)` —— **模型真的开口了**。
+   ⚠ 那次自检会话（标题「方寸派单 · 开工 · dsh-fangcun」）是验证产物，可以在界面里删掉。
+   另外**按钮本来就在**：本机安装包 `E:\Software\fangcun-desktop\resources\app.asar` 里
    `dist/main/ipc.js` / `dist/preload/index.js` / `dist/renderer/assets/index-*.js` 都含
    `context:dispatchDsh` 与「派给 DSH」——"界面入口还没有"这个旧判断是错的，别再按它排期。
+   **仍没验过的**：真人在方寸界面上点那个按钮（这条只是用等价文件模拟的）、以及 `kind: plan` 的规划派单。
 
 ## 9. 文档地图
 
