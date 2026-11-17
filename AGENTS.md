@@ -116,13 +116,25 @@ electron-updater 目录 / 开始菜单与桌面快捷方式 / Program Files 与 
 `section()` 放**静态规则段**（`lib/prompt.js`，不掺动态数据，别破坏提示词缓存）+
 `context()` 放**一行现状**（`lib/status.js` 的内存快照，60 秒后台刷新；provider **绝不碰管道**）。
 
-**模型工具**（REV-014 ②，0.4.0 起）：`apply()` 里 `root.get('tools')`（同样是 `get` 不是 `inject`，
-理由见事实 11）→ `register()` 三个定义（`lib/tool.js`）→ 模型调到就开一条管道连接、用完即关。
-`fangcun_tasks` → `list_tasks`、`fangcun_card` → `get_task`、`fangcun_write` 按
-`action` → `create_task` / `update_task` / `move_status`。**只白名单转发**，不做任意工具名转发。
+**模型工具**（REV-014 ②，0.4.0 起；`fangcun_context` 0.5.0 起）：`apply()` 里 `root.get('tools')`
+（同样是 `get` 不是 `inject`，理由见事实 11）→ `register()` **四个**定义（`lib/tool.js`）→
+模型调到就开一条管道连接、用完即关。
+
+| 工具 | 转发 | 说明 |
+|---|---|---|
+| `fangcun_context` | `project_charter` + `decision_list` + `list_tasks`（**并行**） | 一屏项目背景：章程四节 + 决策 + 未结卡。**记忆层的可用面** |
+| `fangcun_tasks` | `list_tasks` | 列未结卡（只读） |
+| `fangcun_card` | `get_task` | 读一张卡正文（只读） |
+| `fangcun_write` | `create_task` / `update_task` / `move_status`（按 `action`） | 唯一的写口 |
+
+`fangcun_context` 的三条铁律（`tool ⑦/⑦b/⑦c` 钉着）：
+①**缺节要说「真没写」**，不许替项目编目标；②三处**并行**拉，**有一处通就算连上**（只缺一处单独标）；
+③缺 `project` 就抛，不许默认成"全部项目"去猜。
+
+**只白名单转发**，不做任意工具名转发。
 工具名是 `fangcun_*` 而**不是** `mcp__fangcun__*`：后者属于方寸 MCP 客户端，它断开时（卡 140864fa）
-那批工具全会消失，而这三个走插件自己的管道，仍然可用。
-输出一律**有界**（列表 30 条、正文 4000 字）并在超限时明说 —— 上下文是共用资源。
+那批工具全会消失，而这四个走插件自己的管道，仍然可用。
+输出一律**有界**（列表 30 条、正文 4000 字、决策 8 条、卡 12 张）并在超限时明说 —— 上下文是共用资源。
 注册状态进 `health.tools = { registered, names, error }`。
 
 **自证**：同一条 `session/event` 订阅里，`tool/call` 且名字**以 `mcp__fangcun__` 或 `fangcun_` 开头**
@@ -194,7 +206,7 @@ electron-updater 目录 / 开始菜单与桌面快捷方式 / Program Files 与 
 ## 5. 本地怎么跑
 
 ```powershell
-npm test        # 104 条，不需要 DSH、不需要真方寸（真起假管道）
+npm test        # 107 条，不需要 DSH、不需要真方寸（真起假管道）
 npm pack        # 验发布包；CI 会把 tgz 解出来真 apply 一次
 ```
 
@@ -317,7 +329,7 @@ runner 是 **`windows-latest` + Git Bash**：插件只支持 Windows，`detect` 
    直到方寸的看板服务真的起来。挂件开合/点看板现在会写 `health.widget.page` 的
    `panel` / `board` 事件，用来分辨"点击没进来"和"链接打不开"。
 9. **0.4.0 的模型工具只在单测里绿过**：真机重启后要按三点复核 ①`health.tools.registered` 为 true、
-   `names` 三个齐全；②工具表里出现 `fangcun_tasks / fangcun_card / fangcun_write`；
+   `names` 四个齐全；②工具表里出现 `fangcun_context / fangcun_tasks / fangcun_card / fangcun_write`；
    ③真调一次 `fangcun_tasks` 能拿到卡（这条同时验通了"插件自己走管道"这条路，
    与 MCP 客户端断开与否**无关** —— 卡 140864fa 修不修都应该通）。
    如果 `registered:false`，看 `health.tools.error` 写的重试次数。

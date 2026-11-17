@@ -37,9 +37,9 @@ const byName = (tools) => Object.fromEntries(tools.map((t) => [t.name, t]))
 test('① 造出三个真工具，定义字段齐全', () => {
   const { deps } = fakeDeps()
   const tools = buildTools(deps)
-  assert.equal(tools.length, 3)
+  assert.equal(tools.length, 4)
   const t = byName(tools)
-  assert.deepEqual(Object.keys(t).sort(), ['fangcun_card', 'fangcun_tasks', 'fangcun_write'])
+  assert.deepEqual(Object.keys(t).sort(), ['fangcun_card', 'fangcun_context', 'fangcun_tasks', 'fangcun_write'])
 
   for (const def of tools) {
     // contracts.ts：ToolDefinition extends ToolSchema，且 output 是**必须**的
@@ -232,6 +232,76 @@ test('⑤ 工具真发对参数：list_tasks 带 view/project/status，create �
   assert.equal(w.ok, true)
   assert.equal(calls[1].name, 'create_task')
   assert.deepEqual(calls[1].args, { title: 'T', project: 'p', body: 'B', priority: '中', tags: ['x'] })
+})
+
+test('⑦ fangcun_context：一屏说完「项目要变成什么 + 定过什么 + 手上还有什么」', async () => {
+  const { deps, calls } = fakeDeps({
+    project_charter: {
+      mission: '世界观地图可视化。',
+      goal: '做完底图生成。',
+      scenario: '',                 // 空着 → 不许编
+      boundary: '只认机检。',
+      structureMapAgeDays: 51,
+    },
+    decision_list: { decisions: [{ id: 'D-101', '内容': '选 A 主线', '日期': '2026-11-12', '状态': '有效' }], total: 1 },
+    list_tasks: [
+      { id: 'c1', title: '做底图', status: '进行中' },
+      { id: 'c2', title: '已关的', status: '完成' },
+    ],
+  })
+  const t = byName(buildTools(deps))
+  const r = await t.fangcun_context.execute({ project: 'sitian' })
+
+  assert.equal(r.connected, true)
+  assert.equal(r.mission, '世界观地图可视化。')
+  assert.equal(r.boundary, '只认机检。')
+  // 空节必须标出来，而不是空字符串糊过去
+  assert.deepEqual(r.missingSections, ['场景'])
+  assert.equal(r.structureMapAgeDays, 51)
+  // 决策与卡都带上了
+  assert.equal(r.decisions[0].id, 'D-101')
+  assert.equal(r.cards.length, 1, '关掉的卡不许出现在「手上还有的活」里')
+  assert.equal(r.cards[0].id, 'c1')
+
+  // 三处是并行拉的（不串行）
+  assert.deepEqual(calls.map((c) => c.name).sort(), ['decision_list', 'list_tasks', 'project_charter'])
+
+  // 渲染：缺节那句必须说"真没写，不许替它填"
+  const text = t.fangcun_context.output.render({}, r)[0].text
+  assert.match(text, /使命：世界观地图可视化/)
+  assert.match(text, /真没写/)
+  assert.match(text, /场景/)
+})
+
+test('⑦b 三处都没拉到才算"没连上"；只缺一处仍算连上', async () => {
+  // 全挂 → connected:false
+  const allDown = { async callTool() { throw new Error('no pipe') } }
+  const t1 = byName(buildTools(allDown))
+  const down = await t1.fangcun_context.execute({ project: 'x' })
+  assert.equal(down.connected, false)
+  assert.match(down.hint, /没在运行|下载/)
+
+  // 只有 charter 成功 → 仍算连上，其余空
+  const partial = {
+    async callTool(name) {
+      if (name === 'project_charter') {
+        return { content: [{ type: 'text', text: JSON.stringify({ mission: 'M' }) }] }
+      }
+      throw new Error('boom')
+    },
+  }
+  const t2 = byName(buildTools(partial))
+  const r = await t2.fangcun_context.execute({ project: 'x' })
+  assert.equal(r.connected, true, '有一处通就说方寸在')
+  assert.equal(r.mission, 'M')
+  assert.deepEqual(r.decisions, [])
+  assert.deepEqual(r.cards, [])
+})
+
+test('⑦c 缺 project 就抛（不许默认成"全部项目"去猜）', async () => {
+  const { deps } = fakeDeps()
+  const t = byName(buildTools(deps))
+  await assert.rejects(() => t.fangcun_context.execute({}), /project/)
 })
 
 test('⑥ makePipeCallTool 造出来的东西形状对（不真连管道）', () => {

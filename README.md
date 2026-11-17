@@ -102,9 +102,16 @@ dsh plugin --profile desktop add https://github.com/MUYU46548/dsh-fangcun/releas
 
 | 工具 | 做什么 |
 |---|---|
+| `fangcun_context` | **一次拿到项目背景**：章程四节（使命/目标/场景/边界）+ 最近有效决策 + 手上还有的活 |
 | `fangcun_tasks` | 列未结的卡（只读） |
 | `fangcun_card` | 读某一张卡的正文（只读） |
 | `fangcun_write` | 新建 / 修改 / 改状态（`create` / `update` / `move`） |
+
+**为什么 `fangcun_context` 是最重要那一个**：在这之前，模型只知道"有方寸这个看板"，
+不知道**这个项目要变成什么**——于是它照着通用常识干活。这是"AI 写代码没全局意识、
+天天乱改、忘记东西"的直接对策：**先给项目的灵魂，再让它动手。**
+
+章程哪一节没人写，它会**明说「真没写」**，并列出缺哪几节 —— 不替项目编目标。
 
 几条刻意的设计：
 

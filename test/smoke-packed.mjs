@@ -50,7 +50,7 @@ assert.deepEqual(
 // 0.4.0：模型工具必须真的注册（发布包漏掉 lib/tool.js 就是"装了但模型还是调不到"）
 assert.deepEqual(
   toolDefs.map((d) => d.name).sort(),
-  ['fangcun_card', 'fangcun_tasks', 'fangcun_write'],
+  ['fangcun_card', 'fangcun_context', 'fangcun_tasks', 'fangcun_write'],
   '发布包里的模型工具必须齐全',
 )
 for (const d of toolDefs) {
