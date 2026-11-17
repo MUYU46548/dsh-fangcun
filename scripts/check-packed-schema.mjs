@@ -125,8 +125,8 @@ try {
   for (const d of defs) {
     let ok = true
     const cases = [
-      // parameters 在宿主契约里是"字段名→schema"的记录，不是完整 schema，包一层再验
-      ['parameters', d.parameters ? { type: 'object', properties: d.parameters, required: [] } : null],
+      // parameters 原样交给宿主验：宿主 tools.register 不编译它，是直接发给 provider 的
+      ['parameters', d.parameters ? d.parameters : null],
       ['output.schema', d.output && d.output.schema],
     ]
     for (const [label, schema] of cases) {

@@ -420,3 +420,30 @@ test('⑦b 每个 required 数组里的名字都真的在同层 properties 里�
   assert.deepEqual(bad, [], 'required 里的名字必须在同层 properties 里 —— 拼错会被宿主拒')
 })
 
+test('⑦c parameters 必须是完整 JSON Schema：根上不许摊着属性名', () => {
+  // 真机 2026-11-17：fangcun_write 的 parameters 写成了「字段名→子 schema」的扁平映射，
+  // 宿主 tools.register 不编译，原样发给 provider → 根上的 `title` 成了对象，
+  // 而 JSON Schema 规定 title 是字符串 → prefill 端 400，整轮对话连不上。
+  const tools = buildTools({ callTool: async () => ({ ok: true }) })
+  const defs = Array.isArray(tools) ? tools : Object.values(tools)
+  const ALLOWED_ROOT = ['type', 'properties', 'required', 'description', 'additionalProperties', 'title']
+  const bad = []
+  for (const d of defs) {
+    const p = d.parameters
+    if (!p || typeof p !== 'object' || Array.isArray(p)) { bad.push(`${d.name}.parameters 不是对象`); continue }
+    if (p.type !== 'object') bad.push(`${d.name}.parameters.type 必须是 'object'，现在是 ${JSON.stringify(p.type)}`)
+    if (!p.properties || typeof p.properties !== 'object' || Array.isArray(p.properties)) {
+      bad.push(`${d.name}.parameters.properties 缺失 —— 参数得放进 properties 里`)
+    }
+    for (const k of Object.keys(p)) {
+      if (!ALLOWED_ROOT.includes(k)) bad.push(`${d.name}.parameters.${k} 摊在 schema 根部 —— 属性名必须在 properties 里`)
+    }
+    if (Object.hasOwn(p, 'title') && typeof p.title !== 'string') {
+      bad.push(`${d.name}.parameters.title 不是字符串 —— 撞 JSON Schema 的 title 注解，provider 直接 400`)
+    }
+  }
+  assert.deepEqual(bad, [],
+    'parameters 必须是 { type:"object", properties:{…} } —— 交扁平映射等于把属性名摊到 schema 根部')
+})
+
+

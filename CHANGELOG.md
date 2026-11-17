@@ -1,5 +1,38 @@
 # 变更记录
 
+## 0.6.3（2026-11-17）· 参数 schema 要为"参数名叫 title"负责
+
+真机症状：DSH 发不出消息，provider 回 400 ——
+
+```
+Tool 9 function has invalid 'parameters' schema:
+{'description': 'Card title. Required for create.', 'type': 'string'} is not of type 'string'
+Failed validating 'type' in metaschema['properties']['title'] ... On schema['title']
+```
+
+### 根因
+
+四个工具的 `parameters` 写的是「字段名 → 子 schema」的**扁平映射**（那是宿主
+`harness.defineTool` 吃的 DSL 形状）。但本插件走 `ctx.tools.register` 直注册：
+宿主只校验 `output.schema`，**不编译 parameters**，交什么就原样发给 provider。
+
+于是扁平映射被当成 JSON Schema 本身 —— 属性名全摊在根部。`action` / `body` 这类
+未知关键字 provider 直接忽略，只有 `title` 例外：它在 JSON Schema 里是**保留注解**，
+必须是字符串，而这里给的是对象 → 整轮请求 400 打不出去，看起来就像"DSH 坏了"。
+
+### 改法
+
+`parameters` 一律交完整 JSON Schema：`{ type: 'object', properties: { … } }`（`objectParams()`）。
+
+### 为什么之前的守卫没抓到
+
+`scripts/check-packed-schema.mjs` 验的是**自己包了一层**的 schema
+（`{ type:'object', properties: d.parameters }`）—— 又是"自己当裁判"：验的形状与
+真机发出去的形状不是一个东西。现在原样验 `d.parameters`；`test/tool.test.mjs`
+新增 ⑦c：根上出现属性名、或 `title` 不是字符串，直接红。
+
+双向验证：改前源码 4/4 FAIL，改后 4/0 PASS（宿主真校验器）。
+
 ## 0.6.2（2026-11-17）· 0.6.1 发出去的那个"修复"其实是错的
 
 **0.6.1 已经发到 npm 与 GitHub Release 了，而它带着同一个 bug。**
