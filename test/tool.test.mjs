@@ -10,6 +10,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 import {
   buildTools, makePipeCallTool, shapeTasks, shapeCard, shapeLogs, shapeLog, shapeSearch,
   writeCallOf, logWriteCallOf, TOOL_ROUTES, WRITE_ACTIONS, SIGNOFF_STATUSES, NEVER_ROUTED,
@@ -528,6 +529,31 @@ test('⑨b delete_task **永不进白名单**（用户 2026-11-17：「delete_ta
   assert.equal(routes.filter((r) => r === 'delete_task').length, 0)
   // 而且它不在任何已注册工具的返回路由集合里
   assert.equal(routes.includes(NEVER_ROUTED.values().next().value), false)
+})
+
+// ── ⑩ 工具名单四处同步（2026-11-17 CI 红了一次才补的）──────────────
+//
+// 病：0.6.6/0.6.7 加了 `fangcun_log*` 与 `fangcun_search` 之后，`test/smoke-packed.mjs`
+// 里仍钉着「四个」的旧名单 → **`npm test` 139/139 全绿，打 tag 后 CI 红**。
+// 原因是 `npm test` 的脚本列表里**没有 smoke-packed.mjs**（它要先 `npm pack`），
+// 所以"本地全绿"对这份名单毫无保障。工具名一共散在四处：
+//   ① `lib/tool.js` buildTools（唯一真源）
+//   ② `test/tool.test.mjs ①`
+//   ③ `test/plugin.test.mjs ⑧`
+//   ④ `test/smoke-packed.mjs`（CI 才跑）
+// 本条把 ④ 也钉进 `npm test`：读它的源码，把期望数组抠出来跟真源比。
+test('⑩ 工具名单四处同步：smoke-packed 的旧名单不许漂移（CI 才跑的那份）', async () => {
+  const need = buildTools({ async callTool() { return { content: [{ type: 'text', text: '[]' }] } } })
+    .map((t) => t.name).sort()
+
+  const src = fs.readFileSync(new URL('./smoke-packed.mjs', import.meta.url), 'utf-8')
+  // 抠出 `toolDefs.map((d) => d.name).sort(),` 后面那个数组字面量
+  const m = /toolDefs\.map\(\(d\)\s*=>\s*d\.name\)\.sort\(\),\s*\[([\s\S]*?)\]/.exec(src)
+  assert.ok(m, 'smoke-packed.mjs 里找不到工具名断言 —— 结构变了就更新本条')
+  const listed = m[1].split(',').map((s) => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean).sort()
+
+  assert.deepEqual(listed, need,
+    'smoke-packed.mjs 的工具名单与 lib/tool.js 漂移了（这条只有 CI 会红，所以必须在这里先红）')
 })
 
 test('⑥ makePipeCallTool 造出来的东西形状对（不真连管道）', () => {

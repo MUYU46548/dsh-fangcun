@@ -48,9 +48,18 @@ assert.deepEqual(
 )
 
 // 0.4.0：模型工具必须真的注册（发布包漏掉 lib/tool.js 就是"装了但模型还是调不到"）
+//
+// ⚠ 2026-11-17 CI 红了一次：0.6.6/0.6.7 加了日志三件套 + search 之后，这里仍然钉着
+//   「四个」的旧名单。**`npm test` 的脚本列表里没有本文件**（它要求先 npm pack），
+//   所以本地 139/139 全绿也完全看不见它 —— 只有打 tag 后 CI 才会红。
+//   这意味着"改工具名必须四处同步"：`tool.test.mjs ①`、`plugin.test.mjs ⑧`、
+//   **本文件**、以及 `AGENTS.md` 的工具表。
 assert.deepEqual(
   toolDefs.map((d) => d.name).sort(),
-  ['fangcun_card', 'fangcun_context', 'fangcun_tasks', 'fangcun_write'],
+  [
+    'fangcun_card', 'fangcun_context', 'fangcun_log', 'fangcun_log_write',
+    'fangcun_logs', 'fangcun_search', 'fangcun_tasks', 'fangcun_write',
+  ],
   '发布包里的模型工具必须齐全',
 )
 for (const d of toolDefs) {
