@@ -83,6 +83,8 @@
 | 44 | ✅ **`fangcun_write` 三条 action + 三道闸真机全通**（2026-11-17 19:50，此前只验过 `create`）：`update` 改正文 → `get_task` 确认落盘；`move` 待办→草稿 → `get_task` 报 `status=草稿`；`move`→`完成` **被拒**；`update`→`驳回` **被拒**；`create` 带 `status:完成` **被拒**。五条全是真调真拿拒绝，没有一条是"我以为它该报错"。⚠ 写工具的三道锁**都在插件侧先挡**，方寸本体那道（`tools.ts` 的 `move_status` 硬拒）还没被撞到过 —— 因为撞不到，这也正是第一道锁存在的理由（事实 31） | 2026-11-17 真机；`tool ③/③b/③c` 在真管道上站得住 |
 | 45 | ✅ **「不丢」真机补测通过**（2026-11-17 20:00，契约 ⑥ 第 6 条）：真 `UsageLedger` + 真管道，只换 `DSH_HOME`。管道不存在时 `outbox=1 / sent=0`；换成 `\\.\pipe\tegula-mcp` 后 `outbox=0 / sent=2`，**积压那轮跟着第 2 轮一起发出去**。⚠ 探针第一版写错过：`UsageLedger` 的选项是 **`home`**（不是 `dataDir`），传错了 outbox 恒为 0，看着像"丢了" —— **这类"自己的探针写错"要先怀疑探针再怀疑代码** | 2026-11-17 实测；`usage ①` 从假管道升到真账本 |
 | 46 | ⚠ **查账别查错文件**：`fangcun/mcp-usage.jsonl` 是 **MCP 调用日志**（字段 `ts / via / ids`，**没有 `card`**）；真账本是 **`fangcun/ai-trace.jsonl`**（`origin=external` 才是 DSH 报的），`card` 字段在那里。2026-11-17 上次日志说"今天 103 条里 74 条没归因（72%）"，按账本重算：**今天 127 条 external 全部带 `card`（100%）**，历史 570 条里 346 条（61%）—— 那个 72% 八成是读了调用日志 | `ai-trace.jsonl` 实读 + 2026-11-17 复核 |
+| 47 | ⚠ **造假环境要"白名单"，不能只覆盖自己记得的那几个变量**（2026-11-17 一晚踩了两次，两次都差点误判成插件 bug）：① 测 `detect.js` 时只覆盖 `APPDATA/LOCALAPPDATA/USERPROFILE`，**漏了 `ProgramData`/`ProgramFiles`** —— 它们继承真 `process.env`，于是查到了本机真实开始菜单的「方寸.lnk」，干净机器报 `installed:true`；② 测 `UsageLedger` 时把选项写成 `dataDir`（应为 `home`），outbox 恒为 0，看着像"记录丢了"。**规则：探针报出"功能坏了"时，先证明探针没写错**（造环境就白名单 + 打印它到底查了哪几处，`checked` 数组就是为这个留的） | 2026-11-17 两次误判 |
+| 48 | ✅ **`detect.js` 五支判定真机全过**（2026-11-17 20:03）：干净机器 → `false` + 查 30 处 + 有 `downloadUrl`；本机 → `true` + `evidence=data-dir`；**cwd 在空目录 `fangcun/` 里不许算痕迹**（`false`）；只有桌面「方寸.lnk」、从没启动过 → `true` + `evidence=shortcut`。第四条是这张功能存在的理由：**装了没跑也得认得出** | 2026-11-17 白名单假环境实测 |
 
 ## 3. 四条链路（改之前先看懂数据怎么走）
 
