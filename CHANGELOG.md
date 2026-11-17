@@ -1,5 +1,67 @@
 # 变更记录
 
+## 0.6.2（2026-11-17）· 0.6.1 发出去的那个"修复"其实是错的
+
+**0.6.1 已经发到 npm 与 GitHub Release 了，而它带着同一个 bug。**
+装 0.6.1 → `health.tools.registered` 仍然是 **false** → 四个工具照样一个都没有。
+
+### 为什么 0.6.1 的修复没生效
+
+它把 `required: true`（属性上的布尔值）改成了数组，但**数组写进了 `properties` 里面**：
+
+```js
+// 0.6.1 发出去的样子（错）：required 成了 properties 的一个"字段"，值是数组
+properties: {
+  id: { type: 'string' },
+  required: ['id'],
+},
+
+// 0.6.2（对）：required 与 properties 同级
+properties: { id: { type: 'string' } },
+required: ['id'],
+```
+
+宿主的话是：`schema.properties.required must be a schema object`。
+
+### 为什么 0.6.1 的守卫没抓到（这才是要记的）
+
+0.6.1 新加的 ⑦ 只认 `required: true` 这一种**布尔**写法。
+数组形式落在 properties 里，它**视而不见**。
+
+> **一条只能抓一半的守卫，比没有更危险** —— 它让人以为验过了。
+
+### 为什么发版流水线也没抓到
+
+`release.yml` 里两步都绿：
+
+- `npm test` —— 看的是**源码**，且 ⑦ 本身漏了一半；
+- `smoke-packed` —— 只报 `tools=4`（**在不在**），不看 schema **合法不合法**。
+
+**于是"单测绿 + 冒烟绿 + 发布成功"三绿，东西装上去照样不能用。**
+
+### 修
+
+| 处 | 做了什么 |
+|---|---|
+| `lib/tool.js` | 7 处 `required` 数组移到 `properties` **同级**（tasks 2 / card 1 / context 3 / write 1） |
+| `test/tool.test.mjs` | 新增 **⑦a**：`required` **数组**落在 `properties` 里 → 红 |
+| `scripts/check-packed-schema.mjs` | 新增：拿**宿主 app.asar 里的真实校验规则**验 schema（不是自己发明口径） |
+| `.github/workflows/release.yml` | 新增一步：**对解包后的 tgz** 跑上面那个守卫 —— 堵住"源码绿、产物坏" |
+
+### 反例自证（三条都要能精确变红）
+
+1. 把 0.6.1 的 `lib/tool.js` 装回来 → `⑦a` 精确点出**全部 7 处**；
+2. `check-packed-schema.mjs` 验**已发布的 0.6.1 包** → `0 / 4`，四个工具全红；
+3. 验 0.6.2 的包 → `4 / 0` 全绿。
+
+### 验证
+
+- `npm test` **122 / 0**（0.6.1 是 121，+1 条 ⑦a）
+- `npm pack` → 解包 → `check-packed-schema` **4 / 0**
+- `SMOKE OK version=0.6.2 routes=4 tools=4`
+- ⚠ **真机 `health.tools.registered === true` 仍未复验** —— 要装 0.6.2 并重启 DSH。
+  在那之前这条**不算完成**，别再写"已修"。
+
 ## 0.6.1（2026-11-17）· 模型工具其实一次都没注册上
 
 > ⚠ **本节在 16:33 被订正过。** 初版写着「四个 tool schema 逐个过宿主口径校验：全绿」——

@@ -70,6 +70,12 @@ jobs:
           tar -xzf dsh-fangcun-*.tgz -C .pkg
           node test/smoke-packed.mjs .pkg/package
 
+      # 上面那步只验"四个工具在不在"，不看 schema 合法不合法。
+      # 0.6.1 就是这么漏的：单测绿、smoke 报 tools=4，装上去 tools.registered 仍 false ——
+      # 因为 required 数组写在了 properties 里面（宿主整批拒注册）。
+      - name: 发布包 schema 必须过宿主门禁
+        run: node scripts/check-packed-schema.mjs .pkg/package
+
       - name: 生成校验和
         run: |
           set -eu
