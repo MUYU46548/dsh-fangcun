@@ -1,5 +1,46 @@
 # 变更记录
 
+## 0.6.5（2026-11-17）· 管子真的通了一次；`fangcun_context` 长出「上次做到哪」
+
+两件事：**派单那条管子此前一次都没跑过**（不是界面没入口——本机安装包里那个按钮一直在），
+以及 `fangcun_*` 那四个工具**没有存在的理由**（模型有 46 个同名 MCP 工具可用）。
+
+### 一、派单管子：现在点一下，开出来的是**会干活**的会话
+
+真机探针（往 `.dispatch-dsh/` 放一份派单、等 8 秒）证明消费端**看起来很成功**：
+`health.dispatch.lastOk = true`、会话 id 也有了。但磁盘上那个会话**只有一行头、零事件**：
+模型永远不知道有这回事。四个错叠在一起：
+
+| # | 错在哪 | 后果 |
+|---|---|---|
+| ① | `session.append('user/message')` 投递 | **不会叫醒 agent** —— 轮次由 Agent 的 inbox 驱动，往日志里补一句只是"历史里多了句话" |
+| ② | 手写的消息没有 `id` / `source` | 宿主校验 `assertMessageEventShape` 要 `id` 非空、`source.kind` 非空；缺了就是坏事件 |
+| ③ | `agents.create({ sessionId, title })` | `title` **不是** `CreateAgentOptions` 的字段（静默丢弃），`meta.cwd` 也没传 → 会话落在 `sessions/_no-cwd/` |
+| ④ | 没传 `agentOptions` | 新 agent 没有 provider/model，第一轮就抛 "has no provider/model" —— 用户看到的是"开出来了，但说话不回" |
+
+改法（与宿主自己的 `dsh-headless` / `dsh-schedule` 同一套）：
+
+- `agents.create({ sessionId, meta: { cwd }, agentOptions })`：`cwd` 先认派单文件的 `cwd:`，
+  再回退 `registry.yaml` 里该项目的 `repo:`（新增 `projectRepoOf`；相对路径一律不认）；
+  `agentOptions` 取 `agentDefaultModel.currentSelection()`，与 GUI 新建会话同源；
+- 投递走 **`agent.followup(message)`**，消息自己带 `id` + `source: { kind: 'user' }`；
+- 名字走 `sessionTitle.rename`，落盘走 `sessions.flush` —— 不 flush 的话消息只活在内存里；
+- 老宿主没有 `followup` 时退回 `session.append`（并明说它不会自己跑），不假装成功。
+
+### 二、`fangcun_context` 现在是"开工一屏"，也是唯一有理由留着的那一个
+
+它一次给四样：章程四节 + 最近有效决策 + 手上的活 + **上次做到哪**
+（最新一条执行日志的标题与它留下的下一步）。MCP 那条路要
+`project_charter` + `decision_list` + `list_tasks` + `list_logs` + `get_log` **五次**才凑齐。
+
+规则段同时收紧：过去写"先用 `fangcun_context`（或 `list_tasks`）"——括号里那个"或"就是
+模型走向 MCP 的门。现在写死"**开工第一件事：`fangcun_context`，不是 `list_tasks`**"，
+并说明为什么不是 MCP 那条路（五次 vs 一次）。
+
+顺带修掉一个真机读出来的显示 bug：卡没少也报"只列前 N 张"（截断口径拿全部卡数比，关掉的卡也被算成"还有更多"）。
+
+测试 127 条全绿（新增：派单必须走 followup / 消息形状合法 / 带模型路由 / 落对目录 / registry 认仓库 / `cwd` 字段可缺省）。
+
 ## 0.6.4（2026-11-17）· create 会静默吞掉 status
 
 **真机验证 0.6.3 时抓到的**：我用 `fangcun_write` 建草稿卡（`status: '草稿'`），

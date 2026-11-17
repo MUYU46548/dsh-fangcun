@@ -252,7 +252,7 @@ test('⑤ 工具真发对参数：list_tasks 带 view/project/status，create �
   assert.deepEqual(calls[1].args, { title: 'T', project: 'p', body: 'B', priority: '中', tags: ['x'] })
 })
 
-test('⑦ fangcun_context：一屏说完「项目要变成什么 + 定过什么 + 手上还有什么」', async () => {
+test('⑦ fangcun_context：一屏说完「项目要变成什么 + 定过什么 + 手上还有什么 + 上次做到哪」', async () => {
   const { deps, calls } = fakeDeps({
     project_charter: {
       mission: '世界观地图可视化。',
@@ -266,6 +266,12 @@ test('⑦ fangcun_context：一屏说完「项目要变成什么 + 定过什么 
       { id: 'c1', title: '做底图', status: '进行中' },
       { id: 'c2', title: '已关的', status: '完成' },
     ],
+    list_logs: [
+      { id: 'log_1', title: '底图第一版', status: '待处理', created: '2026-11-16' },
+      { id: 'log_0', title: '更早的一条', status: '已完成', created: '2026-11-10' },
+    ],
+    // 只有最新那条会被 get_log 补下一步
+    get_log: { id: 'log_1', nextSteps: '先把路网画出来，再对一次坐标。' },
   })
   const t = byName(buildTools(deps))
   const r = await t.fangcun_context.execute({ project: 'sitian' })
@@ -280,18 +286,27 @@ test('⑦ fangcun_context：一屏说完「项目要变成什么 + 定过什么 
   assert.equal(r.decisions[0].id, 'D-101')
   assert.equal(r.cards.length, 1, '关掉的卡不许出现在「手上还有的活」里')
   assert.equal(r.cards[0].id, 'c1')
+  // 「上次做到哪」：最新一条日志 + 它留下的下一步（这一步 MCP 那条路要多走两跳）
+  assert.equal(r.lastLog.id, 'log_1')
+  assert.equal(r.lastLog.nextSteps, '先把路网画出来，再对一次坐标。')
+  assert.equal(r.logsTotal, 2)
 
-  // 三处是并行拉的（不串行）
-  assert.deepEqual(calls.map((c) => c.name).sort(), ['decision_list', 'list_tasks', 'project_charter'])
+  // 四处是并行拉的（不串行）；get_log 只补最新那一条
+  const parallel = calls.filter((c) => c.name !== 'get_log').map((c) => c.name).sort()
+  assert.deepEqual(parallel, ['decision_list', 'list_logs', 'list_tasks', 'project_charter'])
+  const getLogs = calls.filter((c) => c.name === 'get_log')
+  assert.equal(getLogs.length, 1, '只为最新一条日志补下一步，不是整页拉')
 
   // 渲染：缺节那句必须说"真没写，不许替它填"
   const text = t.fangcun_context.output.render({}, r)[0].text
   assert.match(text, /使命：世界观地图可视化/)
   assert.match(text, /真没写/)
   assert.match(text, /场景/)
+  assert.match(text, /上次做到哪/)
+  assert.match(text, /先把路网画出来/)
 })
 
-test('⑦b 三处都没拉到才算"没连上"；只缺一处仍算连上', async () => {
+test('⑦b 四处都没拉到才算「没连上」；只缺一处仍算连上', async () => {
   // 全挂 → connected:false
   const allDown = { async callTool() { throw new Error('no pipe') } }
   const t1 = byName(buildTools(allDown))
@@ -314,6 +329,8 @@ test('⑦b 三处都没拉到才算"没连上"；只缺一处仍算连上', asyn
   assert.equal(r.mission, 'M')
   assert.deepEqual(r.decisions, [])
   assert.deepEqual(r.cards, [])
+  assert.equal(r.lastLog.id, '', '没有日志时 lastLog 必须是空壳，不许编一条')
+  assert.equal(r.logsTotal, 0)
 })
 
 test('⑦c 缺 project 就抛（不许默认成"全部项目"去猜）', async () => {

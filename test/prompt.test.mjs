@@ -44,8 +44,13 @@ test('①c 规则段钉住「只到待验收」—— 两道锁的第一道（�
   assert.match(RULES_TEXT, /拒绝|硬拒/, '要说明方寸会拒绝，别让模型去试')
 })
 
-test('① 规则段钉住四个触发点（⑦开工先查 / ⑧收工回写 / ⑨新问题建卡 / ⑩不过度触发）', () => {
-  assert.match(RULES_TEXT, /开工先查/)
+test('① 规则段钉住四个触发点（⑦开工第一件事 / ⑧收工回写 / ⑨新问题建卡 / ⑩不过度触发）', () => {
+  // 2026-11-17 改：`开工先查` → `开工第一件事是 fangcun_context`。
+  // 原话术只说"先查"，模型可以理解成"先 list_tasks 看一眼"（真机实测：插件工具 0 次使用）。
+  // 现在把**具体是哪个工具、为什么不是 MCP 那五跳**写死在规则段里。
+  assert.match(RULES_TEXT, /开工第一件事/)
+  assert.match(RULES_TEXT, /fangcun_context/, '必须点名这一次调用，不能说"先查方寸"了事')
+  assert.match(RULES_TEXT, /五次/, '要说清 MCP 那条路要五跳 —— 这是模型换用插件工具的唯一理由')
   assert.match(RULES_TEXT, /收工回写/)
   assert.match(RULES_TEXT, /新问题建卡/)
   // 「不过度触发」是反例条款：闲聊不查

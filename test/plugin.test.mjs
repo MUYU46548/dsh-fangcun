@@ -244,7 +244,8 @@ test('⑧ apply：注册规则段 + 一行现状，方寸工具调用落自证�
 
     assert.equal(sections.length, 1, '规则段必须注册')
     assert.equal(sections[0].name, 'dsh-fangcun:rules')
-    assert.match(sections[0].text, /开工先查/)
+    assert.match(sections[0].text, /开工第一件事/, '开工那一步必须点名 fangcun_context，不能含糊成"先查方寸"')
+    assert.match(sections[0].text, /fangcun_context/)
     assert.equal(contexts.length, 1, '一行现状必须注册')
     assert.equal(contexts[0].name, 'dsh-fangcun:status')
     assert.equal(typeof contexts[0].text, 'function', '一行现状是动态 provider')
@@ -282,6 +283,113 @@ test('⑧ apply：注册规则段 + 一行现状，方寸工具调用落自证�
   } finally {
     if (prevHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = prevHome
+    if (prevPipe === undefined) delete process.env.FANGCUN_MCP_PIPE
+    else process.env.FANGCUN_MCP_PIPE = prevPipe
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('⑩ 派单消费：真的投给 Agent（followup），不是往会话日志里补一句话', async () => {
+  // 2026-11-17 真机探针抓到的 bug：`session.append('user/message')` 只让历史里多了一句，
+  // **agent 永远不会跑**（轮次由 inbox 驱动），而且手写的消息缺 `id`/`source` 是坏事件。
+  // 所以这里钉住：必须有 followup、消息形状合法、没 followup 时才退回 append。
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-fangcun-dispatch-'))
+  const dataDir = path.join(home, 'fangcun')
+  const prevHome = process.env.DSH_HOME
+  const prevData = process.env.FANGCUN_DATA_DIR
+  const prevPipe = process.env.FANGCUN_MCP_PIPE
+  process.env.DSH_HOME = home
+  process.env.FANGCUN_DATA_DIR = dataDir
+  process.env.FANGCUN_MCP_PIPE = `\\\\.\\pipe\\dsh-fangcun-absent3-${process.pid}-${Date.now()}`
+
+  const followups = []
+  const appends = []
+  const renamed = []
+  const flushed = []
+  const created = []
+  // 造一份派单，落在插件会去读的目录
+  const dispatchDir = path.join(dataDir, '.dispatch-dsh')
+  fs.mkdirSync(dispatchDir, { recursive: true })
+  fs.writeFileSync(path.join(dataDir, 'registry.yaml'),
+    'projects:\n  - id: dsh-fangcun\n    repo: "E:\\\\CODE\\\\CangKu\\\\dsh-fangcun"\n', 'utf-8')
+  fs.writeFileSync(path.join(dispatchDir, 'dispatch-dsh-fangcun-20261117120000.md'), [
+    '<!-- fangcun-dispatch v1',
+    'project: dsh-fangcun',
+    'at: 2026-11-17T12:00:00.000Z',
+    'kind: plan',
+    '-->',
+    '',
+    '# 项目背景',
+    '使命：把方寸接进 DSH。',
+  ].join('\n'), 'utf-8')
+
+  try {
+    const handled = new Promise((resolve) => {
+      mod.default.apply({
+        on() { return () => {} },
+        effect(fn) { fn() },
+        inject(_l, cb) { cb({ webServer: { register: () => () => {} }, effect: (fn) => { fn() } }) },
+        get(name) {
+          if (name === 'agents') {
+            return {
+              async create(opts) {
+                created.push(opts)
+                const session = {
+                  header: { cwd: opts && opts.meta && opts.meta.cwd },
+                  append: (type, data, o) => appends.push({ type, data, o }),
+                }
+                const agent = {
+                  id: opts.sessionId,
+                  session,
+                  followup(message) {
+                    followups.push(message)
+                    resolve()
+                  },
+                }
+                return { agent, dispose: async () => {} }
+              },
+            }
+          }
+          if (name === 'sessionTitle') return { rename: (s, t) => renamed.push(t) }
+          if (name === 'sessions') return { flush: async (s) => { flushed.push(s); return true } }
+          if (name === 'agentDefaultModel') {
+            return { currentSelection: () => ({ provider: 'deepseek', model: 'deepseek-v4.1', reasoningEffort: 'medium' }) }
+          }
+          return undefined
+        },
+      })
+    })
+
+    await Promise.race([handled, new Promise((r) => setTimeout(r, 3000))])
+
+    assert.equal(followups.length, 1, '必须走 agent.followup —— 否则模型永远不会被叫醒')
+    assert.equal(appends.length, 0, '有 followup 时就不许再往日志里硬塞一条')
+    const msg = followups[0]
+    assert.equal(msg.role, 'user')
+    assert.ok(msg.id && msg.id.length > 5, '消息必须有 id（校验要求非空，缺了就是坏事件）')
+    assert.deepEqual(msg.source, { kind: 'user' }, 'source.kind 必须给，否则 assertMessageEventShape 会拒')
+    assert.match(msg.content[0].text, /方寸派单 · 规划/)
+    assert.match(msg.content[0].text, /使命：把方寸接进 DSH/)
+    // 名字挂上、落盘冲一次 —— 落盘那一步不做的话，磁盘上只有会话头
+    assert.ok(renamed.some((t) => /方寸派单 · 规划 · dsh-fangcun/.test(t)), '会话要有能认的名字')
+    assert.equal(flushed.length, 1, '派单消息必须 flush，否则只活在内存里')
+
+    // 模型路由：不传 provider/model，会话建得出来但第一轮就抛
+    // "has no provider/model" —— 用户看到的是"开出来了，但说话不回"。
+    assert.equal(created.length, 1)
+    assert.deepEqual(created[0].agentOptions, {
+      provider: 'deepseek', model: 'deepseek-v4.1', reasoningEffort: 'medium',
+    }, '必须把宿主默认模型带过去，否则新会话不会思考')
+    // 落目录：派单文件没写 cwd 时回退到 registry.yaml 的 repo
+    // （插件不实现 YAML 反转义：`"E:\\CODE\\…"` 原样取出，Windows 认重复分隔符，
+    //   所以这里按分隔符归一后比 —— 别为了一个断言去写半截 YAML 解析器）
+    assert.equal(String(created[0].meta.cwd).replace(/\\\\/g, '\\').replace(/\//g, '\\'),
+      'E:\\CODE\\CangKu\\dsh-fangcun', '落在项目仓库里，不是 _no-cwd')
+  } finally {
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+    if (prevData === undefined) delete process.env.FANGCUN_DATA_DIR
+    else process.env.FANGCUN_DATA_DIR = prevData
     if (prevPipe === undefined) delete process.env.FANGCUN_MCP_PIPE
     else process.env.FANGCUN_MCP_PIPE = prevPipe
     fs.rmSync(home, { recursive: true, force: true })

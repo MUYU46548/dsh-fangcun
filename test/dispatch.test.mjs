@@ -15,7 +15,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
-  consumeDispatch, dispatchDirOf, dispatchPrompt, listDispatches, parseDispatch,
+  consumeDispatch, dispatchDirOf, dispatchPrompt, listDispatches, parseDispatch, projectRepoOf,
 } from '../lib/dispatch.js'
 
 const tmpData = () => fs.mkdtempSync(path.join(os.tmpdir(), 'fc-dispatch-'))
@@ -216,4 +216,65 @@ test('⑫ 两种派单的正文都原样带上（不许因为换用途把上下�
     const text = dispatchPrompt({ project: 'sitian', kind, body: '使命：世界观地图可视化' })
     assert.match(text, /使命：世界观地图可视化/, kind + ' 派单丢了正文')
   }
+})
+
+// ── 会话落在哪个目录（2026-11-17 真机：派单会话落在 `_no-cwd`，等于派进真空）──
+
+test('⑬ projectRepoOf：从 registry.yaml 里认出仓库，边界收得很紧', () => {
+  const dir = tmpData()
+  fs.writeFileSync(path.join(dir, 'registry.yaml'), [
+    '# 注释',
+    'members:',
+    '  - human',
+    'projects:',
+    '  - id: fangcun-base',
+    '    name: 方寸',
+    '    repo: "E:/CODE/CangKu/fangcun"',
+    '  - id: dsh-fangcun',
+    '    name: 方寸-DSH插件',
+    '    repo: "E:\\CODE\\CangKu\\dsh-fangcun"',
+    '    tools: []',
+    '  - id: no-repo',
+    '    name: 没有仓库的项目',
+    'released:',
+    '  - id: old',
+    '    repo: E:/x/old',
+  ].join('\n'), 'utf-8')
+
+  assert.equal(projectRepoOf(dir, 'fangcun-base'), 'E:/CODE/CangKu/fangcun')
+  assert.equal(projectRepoOf(dir, 'dsh-fangcun'), 'E:\\CODE\\CangKu\\dsh-fangcun')
+  // 该项目没写 repo → 空串；**不许**串到下一块
+  assert.equal(projectRepoOf(dir, 'no-repo'), '')
+  // `released:` 段里的条目同样是 `- id:` 开头 —— 认它是**对的**（归档项目也可能被派单），
+  // 这里钉的是"按 id 找块"这件事本身没被段名干扰。
+  assert.equal(projectRepoOf(dir, 'old'), 'E:/x/old')
+  // 不存在的项目、没数据根、文件缺失都不抛
+  assert.equal(projectRepoOf(dir, 'nope'), '')
+  assert.equal(projectRepoOf('', 'x'), '')
+  assert.equal(projectRepoOf(path.join(dir, 'nowhere'), 'x'), '')
+})
+
+test('⑬b projectRepoOf：相对路径不认（落错地方比不落更糟）', () => {
+  const dir = tmpData()
+  fs.writeFileSync(path.join(dir, 'registry.yaml'), [
+    'projects:',
+    '  - id: rel',
+    '    repo: ./relative/path',
+  ].join('\n'), 'utf-8')
+  assert.equal(projectRepoOf(dir, 'rel'), '', '相对路径在不同进程的 cwd 下含义不同，一律不认')
+})
+
+test('⑭ parseDispatch：可选的 cwd 字段（方寸知道就带，不知道不影响老派单）', () => {
+  const withCwd = parseDispatch([
+    '<!-- fangcun-dispatch v1',
+    'project: sitian',
+    'cwd: E:\\CODE\\CangKu\\SiTian',
+    '-->',
+    '',
+    '正文',
+  ].join('\n'))
+  assert.equal(withCwd.cwd, 'E:\\CODE\\CangKu\\SiTian')
+
+  const noCwd = parseDispatch(['<!-- fangcun-dispatch v1', 'project: sitian', '-->', '', '正文'].join('\n'))
+  assert.equal(noCwd.cwd, '', '老派单没有 cwd 行 → 空串，由插件回退到 registry 或宿主的默认目录')
 })

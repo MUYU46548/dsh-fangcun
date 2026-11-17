@@ -75,6 +75,9 @@
 | 36 | ✅ **0.6.3 起模型工具真机可用**（0.4.0 起一直零注册）。2026-11-17 18:11 逐个真调验证：`fangcun_tasks` → `connected:true / total:373`；`fangcun_context` → 三处并行、`missing:['目标','场景','边界']`（**没替项目编**）；`fangcun_card` → 2213 字正文、`truncated:false`。真走 `\\.\pipe\tegula-mcp`，不是单测替身 | 2026-11-17 真机实测 |
 | 37 | ⚠ **`tools.register` 的 `parameters` 必须交完整 JSON Schema**，且**属性名不许叫 `title` 之外还得看 `required`**——见事实 23/23b。0.6.0→0.6.3 四版才通，中间 **0.6.2 把整轮对话打挂过**（provider 400）。**自造校验器 = 自己当裁判，连错两次**；`scripts/check-packed-schema.mjs` 是拿宿主真校验器判的，打包后必跑 | 2026-11-17 事故 |
 | 38 | ⚠ **写工具的参数转发靠手写，容易漏**：0.6.4 修的是 `create` 分支**根本没转发 `status`** —— 模型传 `'草稿'`，落成默认的 `'待办'`（后者在方寸里要过进队列闸，语义不同）。**「全字段」断言如果不逐字段对着 `parameters` 声明数，会跟着一起漏，测试全绿也抓不到** | `tool ③`、0.6.4 CHANGELOG |
+| 39 | ⚠ **往会话日志 `session.append('user/message')` 不会叫醒 agent**：轮次由 Agent 的 inbox 驱动（`agent.followup(message)`）；只 append 的结果是"历史里多了一句话"，模型永远不跑。而且手写的 user 消息**必须有 `id`（非空）与 `source.kind`（非空）**，否则 `assertMessageEventShape` 判它是坏事件。派单那条管子此前就是踩这个，会话建出来是空的 | `plugin ⑩`（2026-11-17 真机探针 + agent-loop `followup` 原文） |
+| 40 | ⚠ **`agents.create` 的三个坑**：① **没有 `title` 字段**（`CreateAgentOptions` 只有 `sessionId/meta/agentOptions/setup/signal` 等，传了静默丢弃）；② **不传 `meta.cwd` 就落在 `sessions/_no-cwd/`**（真机实证），等于派进真空；③ **不传 `agentOptions` 就没有 provider/model**，第一轮抛 `agent "…" has no provider/model` —— 用户看到的是"会话开出来了，但说话不回"。正解：`cwd` 用绝对路径 + `agentOptions` 取 `agentDefaultModel.currentSelection()`（与 GUI 新建会话同源） | 2026-11-17 真机：探针会话落在 `_no-cwd` 且零事件；`agent-loop:686` 原文 |
+| 41 | **会话要"落盘"得自己 `sessions.flush(session)`**：`session.append`/`followup` 只进内存，落盘是 `session/flush` 的活（`dsh-schedule` 每发一条都 await 一次）。探针会话在磁盘上只有一行头、零事件就是这个原因 | `plugin ⑩`、`dsh-schedule` `send()` 原文 |
 
 ## 3. 四条链路（改之前先看懂数据怎么走）
 
@@ -126,14 +129,16 @@ electron-updater 目录 / 开始菜单与桌面快捷方式 / Program Files 与 
 
 | 工具 | 转发 | 说明 |
 |---|---|---|
-| `fangcun_context` | `project_charter` + `decision_list` + `list_tasks`（**并行**） | 一屏项目背景：章程四节 + 决策 + 未结卡。**记忆层的可用面** |
+| `fangcun_context` | `project_charter` + `decision_list` + `list_tasks` + `list_logs`（**并行**）+ 最新一条 `get_log`（补下一步） | 开工一屏：章程四节 + 决策 + 未结卡 + **上次做到哪**。MCP 那条路要五跳才凑齐 |
 | `fangcun_tasks` | `list_tasks` | 列未结卡（只读） |
 | `fangcun_card` | `get_task` | 读一张卡正文（只读） |
 | `fangcun_write` | `create_task` / `update_task` / `move_status`（按 `action`） | 唯一的写口 |
 
 `fangcun_context` 的三条铁律（`tool ⑦/⑦b/⑦c` 钉着）：
-①**缺节要说「真没写」**，不许替项目编目标；②三处**并行**拉，**有一处通就算连上**（只缺一处单独标）；
+①**缺节要说「真没写」**，不许替项目编目标；②四处**并行**拉，**有一处通就算连上**（只缺一处单独标）；
 ③缺 `project` 就抛，不许默认成"全部项目"去猜。
+「上次做到哪」只取**最新一条**日志的标题 + 下一步（`MAX_LOG_BLURB` 600 字）：正文不塞 ——
+那可能是几万字，而且它不是任务卡（渲染里明写这句，否则模型会照着抄）。
 
 **只白名单转发**，不做任意工具名转发。
 工具名是 `fangcun_*` 而**不是** `mcp__fangcun__*`：后者属于方寸 MCP 客户端，它断开时（卡 140864fa）
@@ -318,10 +323,10 @@ runner 是 **`windows-latest` + Git Bash**：插件只支持 Windows，`detect` 
 4. **0.3.0 的三件事只在单测里绿过**（规则段 / 一行现状 / 自证），真机要重启后按
    `health.prompt.rules`、上下文里那一行、`tools.jsonl` 三项复核；②⑦–⑩ 的验收也依赖它。
 5. **2026-11-04 挂件"消失"已确认修好**（重启后 `probe.tb=40 / y=54`，右上角可见）。
-   接着的真机反馈是"不能拖、不能右键、只能左键"：拖动**默认锁着**（设计如此），
-   但没给解释、右键也没菜单 —— 已加右键菜单与锁定 toast（`widget-dom ⑯⑰`）。
-   再接着（2026-11-05）是"能拖了，但松手自动吸附，不能放在想要的位置；同一台机器上的鲸鱼挂件能真拖"：
-   已改成**自由摆放**（`fc-todo-widget:pos` + `widget-dom ⑪`），四角按钮降级为快捷键。
+   ⚠ **用户 2026-11-17 明确纠正过这条卡的前提**："桌面端挂件一直都在，都在了很多天了。哪有消失？"
+   —— 那张卡后来还挂在"进行中"，标题本身在制造误判；真机 `health.widget.page` 2026-11-17 18:02 的证据是
+   `mount` + `probe(in=1, hit=fc-todo-widget, tb=40)`，**没有 `removed`**。以后描述它要按证据说
+   （"可见/被原生按钮区盖住/被摘掉"三种），不要再用"消失"这个词。剩下真正没确认的只有自由摆放那一条：
    **待真机确认**：解锁后拖到任意位置 → 松手就停在那、刷新还在、四角按钮仍能一键摆位。
 6. **REV-005 的三件事（2026-11-05）只在单测里绿过**：逐轮度量（`health.proof.turns`）、
    卡号追踪（`cards.lastCardId`、`usage` note 里的 `card=`）、挂件「在办 / 待拍板 / 本次在办」。
@@ -345,6 +350,19 @@ runner 是 **`windows-latest` + Git Bash**：插件只支持 Windows，`detect` 
 11. **自造校验器是这轮事故的病根**（`0.6.0`/`0.6.1` 两次都是"我自己写的校验器说通过了"）。
    现在 `scripts/check-packed-schema.mjs` 是**拿宿主 app.asar 里的真校验器**判的，
    而且**对打包产物判**（不是工作区）。发版前必跑；CI 里也已加一步。
+
+12. **派单管子（2026-11-17 0.6.5）**：消费端四个错已修（事实 39/40/41）。
+   **真机复核还没做** —— 插件不进热更，要**重启 DSH** 才生效，重启后按这张单子验：
+   ① 方寸里点「派给 DSH」→ DSH 侧边栏**真的多一个会话**，名字是 `方寸派单 · 开工|规划 · <项目>`；
+   ② 那个会话的**目录是项目仓库**（不是 `_no-cwd`）；
+   ③ 第一条消息就是上下文包，而且**模型会自己开口**（不是只有一句躺在历史里）；
+   ④ `health.dispatch.lastOk=true` 且 `lastSessionId` 非空；
+   ⑤ `~/.dsh/sessions/<项目目录>/fangcun-dispatch-*/session.v4.jsonl.zstd` 里**有 user/message 事件**
+   （不是只有一行头）。
+   ⚠ 探针那份旧派单会话（`sessions/_no-cwd/fangcun-dispatch-mwkk2zww-3fsoidrm`，零事件）是**修复前的证据**，
+   可以删。另外**按钮本来就在**：本机安装包 `E:\Software\fangcun-desktop\resources\app.asar` 里
+   `dist/main/ipc.js` / `dist/preload/index.js` / `dist/renderer/assets/index-*.js` 都含
+   `context:dispatchDsh` 与「派给 DSH」——"界面入口还没有"这个旧判断是错的，别再按它排期。
 
 ## 9. 文档地图
 
