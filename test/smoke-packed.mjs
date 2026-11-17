@@ -27,12 +27,17 @@ assert.equal(mod.default.name, pkg.name, 'apply 的 name 必须是包名（挂�
 assert.equal(mod.PLUGIN_VERSION, pkg.version, 'PLUGIN_VERSION 与 package.json 漂移了')
 
 const registered = []
+const toolDefs = []
 const listeners = new Map()
 mod.default.apply({
   on(name, fn) { listeners.set(name, fn); return () => {} },
   effect(fn) { fn() },
   inject(_list, cb) {
     cb({ webServer: { register: (r) => { registered.push(r); return () => {} } }, effect: (fn) => { fn() } })
+  },
+  get(name) {
+    if (name === 'tools') return { register(def) { toolDefs.push(def); return () => {} } }
+    return undefined
   },
 })
 
@@ -41,6 +46,17 @@ assert.deepEqual(
   ['/fangcun/api/tasks', '/fangcun/api/widget-report', '/fangcun/health.json', '/fangcun/widget.js'],
   '发布包里的路由必须齐',
 )
+
+// 0.4.0：模型工具必须真的注册（发布包漏掉 lib/tool.js 就是"装了但模型还是调不到"）
+assert.deepEqual(
+  toolDefs.map((d) => d.name).sort(),
+  ['fangcun_card', 'fangcun_tasks', 'fangcun_write'],
+  '发布包里的模型工具必须齐全',
+)
+for (const d of toolDefs) {
+  assert.ok(d.output && d.output.schema, d.name + ' 缺 output.schema（宿主会拒掉整次调用）')
+  assert.equal(typeof d.execute, 'function', d.name + ' 缺 execute')
+}
 
 let body = ''
 const healthRoute = registered.find((r) => r.path === '/fangcun/health.json')
@@ -82,4 +98,4 @@ assert.equal(rows[0].key, 'session-smoke001#1', '发布包里的接线也必须�
 assert.equal(rows[0].payload.prompt_tokens, 6, 'prompt 必须含 cache_read')
 
 fs.rmSync(home, { recursive: true, force: true })
-console.log(`SMOKE OK  version=${pkg.version}  routes=${registered.length}  lib=${fs.readdirSync(path.join(pkgDir, 'lib')).join(',')}`)
+console.log(`SMOKE OK  version=${pkg.version}  routes=${registered.length}  tools=${toolDefs.length}  lib=${fs.readdirSync(path.join(pkgDir, 'lib')).join(',')}`)

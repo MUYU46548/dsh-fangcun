@@ -224,12 +224,16 @@ test('⑧ apply：注册规则段 + 一行现状，方寸工具调用落自证�
   try {
     const sections = []
     const contexts = []
+    const toolDefs = []
     const listeners = new Map()
     mod.default.apply({
       on(name, fn) { listeners.set(name, fn); return () => {} },
       effect(fn) { fn() },
       inject(_l, cb) { cb({ webServer: { register: () => () => {} }, effect: (fn) => { fn() } }) },
       get(name) {
+        if (name === 'tools') {
+          return { register(def) { toolDefs.push(def); return () => {} } }
+        }
         if (name !== 'systemPrompt') return undefined
         return {
           section(input) { sections.push(input); return () => {} },
@@ -245,6 +249,17 @@ test('⑧ apply：注册规则段 + 一行现状，方寸工具调用落自证�
     assert.equal(contexts[0].name, 'dsh-fangcun:status')
     assert.equal(typeof contexts[0].text, 'function', '一行现状是动态 provider')
     assert.equal(typeof contexts[0].text(), 'string', 'provider 必须同步给字符串')
+
+    // REV-014 ②：模型工具真的注册上了（这是"挂件 vs 智能层"的分界线）
+    assert.deepEqual(toolDefs.map((d) => d.name).sort(), ['fangcun_card', 'fangcun_tasks', 'fangcun_write'])
+    for (const d of toolDefs) {
+      assert.ok(d.output && d.output.schema, d.name + ' 缺 output.schema')
+      assert.equal(typeof d.execute, 'function')
+    }
+    const ht = mod.collectHealth().tools
+    assert.equal(ht.registered, true)
+    assert.equal(ht.names.length, 3)
+    assert.equal(ht.error, '')
 
     const hp = mod.collectHealth().prompt
     assert.equal(hp.rules, true)
@@ -285,11 +300,16 @@ test('⑨ 宿主没有 systemPrompt 服务时：不假装注册，health 如实�
       on() { return () => {} },
       effect(fn) { fn() },
       inject(_l, cb) { cb({ webServer: { register: (r) => { registered.push(r); return () => {} } }, effect: (fn) => { fn() } }) },
-      get() { return undefined }, // 老宿主：没有 systemPrompt
+      get() { return undefined }, // 老宿主：没有 systemPrompt，也没有 tools
     })
     const hp = mod.collectHealth().prompt
     assert.equal(hp.rules, false, '没注册就写 false，不许假装成功')
     assert.match(hp.error, /重试|不可用/)
+    // REV-014 ②：没有 tools 服务时同样不假装，如实写原因
+    const ht = mod.collectHealth().tools
+    assert.equal(ht.registered, false, '没注册工具就写 false')
+    assert.deepEqual(ht.names, [])
+    assert.match(ht.error, /重试|不可用/)
     assert.equal(registered.length, mod.ROUTES.length, '提示词拿不到时，路由照旧注册')
   } finally {
     if (prevHome === undefined) delete process.env.DSH_HOME

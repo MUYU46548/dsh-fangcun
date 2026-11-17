@@ -1,5 +1,49 @@
 # 变更记录
 
+## 0.4.0（2026-11-17）
+
+**插件第一次真的让模型能调方寸做事。** 0.3.0 的全部对外出口是 4 条 HTTP 路由 ——
+那是给浏览器/挂件看的，模型一个工具都没有。这一版补上那一层。
+
+### 模型工具（REV-014 ②）
+
+三个工具，注册在 `ctx.tools`（`lib/tool.js`）：
+
+| 工具 | 做什么 | 转发的方寸 MCP |
+|---|---|---|
+| `fangcun_tasks` | 列卡（只读） | `list_tasks` |
+| `fangcun_card` | 读一张卡的正文（只读） | `get_task` |
+| `fangcun_write` | `action: create / update / move` | `create_task` / `update_task` / `move_status` |
+
+四条边界钉在测试里（`test/tool.test.mjs`，8 条）：
+
+- **只白名单转发**：`action` 不在三个里就抛，绝不转发任意工具名（那是提权）。
+- **参数不全就抛，绝不猜**：`create` 没 `title`、`update`/`move` 没 `id`、`move` 没 `status` 都直接报错。
+- **输出有界**：列表封顶 30 条、单卡正文封顶 4000 字，截断必须说出来
+  （用户原话："每次一共就那么多上下文空间，占满对话就死了"）。
+- **不假装成功**：方寸没开时读工具回空列表、写工具回 `ok:false` + 原因，不抛堆栈也不谎报已写入。
+
+### 为什么不叫 `mcp__fangcun__*`
+
+宿主的方寸 MCP 客户端断开时（卡 `dsh-里的-fangcun-mcp-客-140864fa`），`mcp__fangcun__*` 全部消失。
+这三个工具走**插件自己的命名管道**，不依赖那个 MCP 客户端 —— 所以 MCP 断开时它们仍在。
+
+### 零依赖不变
+
+不 import `@deepseek-ai/dsh-tools`（`defineTool` 只是类型标注 + 校验，返回的就是原对象），
+形状按 `dsh-tools/src/contracts.ts` 的 `ToolDefinition` 对齐。
+
+### health 新增 `tools`
+
+`health.tools = { registered, names, error }`。拿不到 `tools` 服务（老宿主）时 `registered:false`
+且 `error` 写明原因 —— 与 `prompt` 同一个口径：**不假装注册上**。
+
+### 两处顺手修正
+
+- `shapeCard` 的每个分支都填满 `output.schema` 的 required 字段：少一个字段，
+  宿主在 output 校验那步会拒掉整次调用，那会让"没连上方寸"以"工具坏了"的样子出现。
+- `fangcun_tasks` / `fangcun_card` 的管道异常就地兜住：方寸没开是常态，不是异常。
+
 ## 0.3.0（2026-11-07）
 
 这一版把契约 ⑥ 剩下的三件事做完：**规则段**、**一行现状**、**自证 sidecar**；

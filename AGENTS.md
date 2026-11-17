@@ -57,6 +57,10 @@
 | 19 | **`collectIndexInjections()` 每次调用都新发一张表**（"Fresh per call"）。`widget.injected/pushed` 是**收集次数**（桌面 boot 一次 + 每次 index 渲染一次），**不是插件 apply 次数**，别当重复安装的证据 | `webServer` 服务原文：`collectIndexInjections()` 描述 + 2026-11-04 实测 2/2 而 `package.json` 只有一处安装 |
 | 20 | 桌面端 `kind:'script'` 行 = 页面侧建内联 `<script>` **append 到 `body`**（`placement` 决定 head/body）。`script-src` 走 `await` 加载、失败会 reject 启动 —— 别用 | 同上 `UZ()` 实现 |
 | 21 | ⚠ **桌面窗口顶上 40px 是原生窗口按钮区**：Windows 上用 `titleBarStyle:'hidden'` + `titleBarOverlay{height:40}`，页面铺满整窗、**被原生层盖住**。DOM 里放在 `top:14px` 的东西 `elementFromPoint` 仍命中它自己，但人眼看不见（2026-11-04 真机：挂件"消失"的真因）。让开用 `env(titlebar-area-height)`（Chromium 在开了 overlay 的窗口里提供） | `app.asar /lib/main.js` 的 `new BrowserWindow({ titleBarStyle: 'hidden', titleBarOverlay: { height: 40 } })`（0.2.2-rc.1）+ 真机 probe |
+| 22 | **注册模型工具**：`root.get('tools').register(definition)`。`ToolDefinition` = `name` + `description` + `parameters` + **`output`（必须）** + `execute(args, exec)`；可选 `presentCall` / `presentResult` / `timeoutMs` / `isConcurrencySafe`。`output` 形状 = `{ schema, render(args, value) }` | `dsh-tools/src/contracts.ts` 的 `ToolDefinition` 与 `ToolOutputDefinition`（0.2.2-rc.3） |
+| 23 | **`defineTool` 不改变对象**：它只做类型标注 + 校验，返回的就是传入的那个对象。所以**零依赖插件可以不 import `@deepseek-ai/dsh-tools`**，直接把裸对象交给 `register` —— 形状对齐 contracts.ts 即可 | `dsh-tool-todo/src/index.ts` 用 `ctx.tools.register(defineTool({…}))`，`defineTool` 无包装逻辑 |
+| 24 | **`output.schema` 的 required 字段必须每个分支都填满**：少一个字段，宿主在 output 校验那步会拒掉**整次**调用 —— "没连上后端"会以"工具坏了"的样子出现 | `ToolOutputDefinition`：`schema` 是 `JsonSchemaNode`，`render` 是其纯投影；`tool.test.mjs ③b③c` 钉着 |
+| 25 | 本机 `HKCU\Console\%%Startup` **键存在但零值** → Windows 11 默认把控制台**委托给 Windows Terminal**。于是任何进程只要创建控制台，就会弹 `WindowsTerminal.exe -Embedding` 的可见窗口（`CASCADIA_HOSTING_WINDOW_CLASS`）。真正的 `PseudoConsoleWindow` 归属 cmd 自己、`rect=0x0` **不可见** —— 判断"谁闪的窗口"要看 `CASCADIA_*` 那一行 | 2026-11-17 实测：`MainWindowHandle` 对控制台窗口恒为 0（不可用作判据），必须枚举 `ConsoleWindowClass`/`PseudoConsoleWindow`/`CASCADIA_*` |
 
 ## 3. 四条链路（改之前先看懂数据怎么走）
 
@@ -101,6 +105,15 @@ electron-updater 目录 / 开始菜单与桌面快捷方式 / Program Files 与 
 `health.prompt.error`；**不写进 inject**，否则老宿主上插件永不 apply）→
 `section()` 放**静态规则段**（`lib/prompt.js`，不掺动态数据，别破坏提示词缓存）+
 `context()` 放**一行现状**（`lib/status.js` 的内存快照，60 秒后台刷新；provider **绝不碰管道**）。
+
+**模型工具**（REV-014 ②，0.4.0 起）：`apply()` 里 `root.get('tools')`（同样是 `get` 不是 `inject`，
+理由见事实 11）→ `register()` 三个定义（`lib/tool.js`）→ 模型调到就开一条管道连接、用完即关。
+`fangcun_tasks` → `list_tasks`、`fangcun_card` → `get_task`、`fangcun_write` 按
+`action` → `create_task` / `update_task` / `move_status`。**只白名单转发**，不做任意工具名转发。
+工具名是 `fangcun_*` 而**不是** `mcp__fangcun__*`：后者属于方寸 MCP 客户端，它断开时（卡 140864fa）
+那批工具全会消失，而这三个走插件自己的管道，仍然可用。
+输出一律**有界**（列表 30 条、正文 4000 字）并在超限时明说 —— 上下文是共用资源。
+注册状态进 `health.tools = { registered, names, error }`。
 
 **自证**：同一条 `session/event` 订阅里，`tool/call` 且名字以 `mcp__fangcun__` 开头 →
 追加 `$DSH_HOME/dsh-fangcun/tools.jsonl`（只记时间/会话/轮次/工具名，不记参数；上限 500）。
@@ -155,13 +168,15 @@ electron-updater 目录 / 开始菜单与桌面快捷方式 / Program Files 与 
 | **按卡记账**：note 放得下才带 `card=`，放不下整段不带（不写半截 id），原有 `cache_read` 口径不被挤掉，note ≤ 120 | `cards ④` |
 | **挂件口径照方寸的 status 数**（在办/待拍板），`focus` 只配可见列表里的标题，没有就只给卡号 | `cards ⑤`、`widget-dom ⑱⑱b` |
 | apply 真的注册了提示词；没有 `systemPrompt` 服务时不假装成功、其它功能照旧；方寸工具调用落 `tools.jsonl` | `plugin ⑧⑨` |
+| **模型工具是真 ToolDefinition**（name/description/parameters/output/execute 齐全）；**只白名单转发**（不在 `create/update/move` 里的 action 就抛）；参数不全就抛不猜；输出有界且截断明说；方寸没开时读回空、写回 `ok:false` 不谎报 | `tool ①②③④⑤` |
+| 没有 `tools` 服务时 `health.tools.registered=false` + 写明原因，不假装注册 | `plugin ⑨` |
 | **看板链接只指向活着的进程**：`.tegula-port` 有 PID 且 PID 已退出 → 不给链接；旧格式只有端口 → 保留旧行为 | `plugin ⑩` |
 | health 只报能自证的事实、不泄凭据 | `plugin ⑤` |
 
 ## 5. 本地怎么跑
 
 ```powershell
-npm test        # 71 条，不需要 DSH、不需要真方寸（真起假管道）
+npm test        # 79 条，不需要 DSH、不需要真方寸（真起假管道）
 npm pack        # 验发布包；CI 会把 tgz 解出来真 apply 一次
 ```
 
@@ -275,6 +290,14 @@ runner 是 **`windows-latest` + Git Bash**：插件只支持 Windows，`detect` 
    已改成"PID 不在就不给链接"（`plugin ⑩`）。真机重启后应看到：挂件面板不再出现「打开看板」，
    直到方寸的看板服务真的起来。挂件开合/点看板现在会写 `health.widget.page` 的
    `panel` / `board` 事件，用来分辨"点击没进来"和"链接打不开"。
+9. **0.4.0 的模型工具只在单测里绿过**：真机重启后要按三点复核 ①`health.tools.registered` 为 true、
+   `names` 三个齐全；②工具表里出现 `fangcun_tasks / fangcun_card / fangcun_write`；
+   ③真调一次 `fangcun_tasks` 能拿到卡（这条同时验通了"插件自己走管道"这条路，
+   与 MCP 客户端断开与否**无关** —— 卡 140864fa 修不修都应该通）。
+   如果 `registered:false`，看 `health.tools.error` 写的重试次数。
+10. **`fangcun_write` 是第一个能改方寸的模型工具**：建议先在真机上只跑 `create`（新建一张草稿卡），
+   确认落卡正确后再用它 `move`。它不做"顺手补一步"，所以参数就是最终结果 ——
+   这也是为什么它拒绝猜参数。
 
 ## 9. 文档地图
 
