@@ -1,6 +1,10 @@
-﻿# 变更记录
+# 变更记录
 
 ## 0.6.1（2026-11-17）· 模型工具其实一次都没注册上
+
+> ⚠ **本节在 16:33 被订正过。** 初版写着「四个 tool schema 逐个过宿主口径校验：全绿」——
+> **那是假的**。当时代验器只抓 `required: true`（布尔值），漏掉了下面这个更隐蔽的写法，
+> 于是 121 条全绿、真机上四个工具照样全灭。订正内容见本节末尾「订正 · 第一次修没修对」。
 
 **这是 0.6.0 的真机验收结果：装上了，但四个模型工具一个都没有。**
 
@@ -46,11 +50,44 @@ connected: { type: 'boolean', required: true }     // ← 这种方言宿主不�
   - `required` 数组里的名字不在同层 `properties` 里 → 红
   - **反例自证过**：把 0.6.0 的旧文件放回去，新断言精确变红 1 条
 
+### 订正 · 第一次修没修对（2026-11-17 16:33）
+
+真机 `health.tools.registered` **仍然是 false**。第一次修把 `required` 从
+「属性上的布尔值」改成了「数组」，但**数组写在了 `properties` 里面**：
+
+```js
+// 错（第一次修的结果）：required 成了 properties 的一个"字段"，值是数组
+properties: {
+  id: { type: 'string' },
+  required: ['id'],          // ← 位置错了
+},
+
+// 对：required 与 properties 同级
+properties: { id: { type: 'string' } },
+required: ['id'],
+```
+
+宿主对这种写法的话是：`schema.properties.required must be a schema object`。
+
+**为什么这次仍然没被抓到**：新加的 ⑦ 只认 `required: true` 这一种**布尔**写法，
+数组形式落在 properties 里它视而不见 —— **一条只能抓一半的守卫，比没有更危险**，
+它让我以为验过了。7 处（`fangcun_tasks` 2 + `fangcun_card` 1 + `fangcun_context` 3 +
+`fangcun_write` 1）全部踩中。
+
+**这次的修法**：
+- `lib/tool.js`：7 处 `required` 数组全部移到 `properties` **同级**
+- 新增测试 `⑦a`：`required` **数组**落在 properties 里 → 红（专门补上那半个缺口）
+- **反例自证**：把 0.6.1 初版文件放回去 → `⑦a` 精确变红，一次点出全部 7 处
+- 方寸侧新增 `scripts/test/check-plugin-schema.cjs`：把**宿主 app.asar 里的真实校验规则**
+  抄成守卫（不是自己发明口径），四个工具逐个过；自带 5 条反例自证
+  （含"属性级布尔"与"数组塞进 properties"两种病，都必须被抓）
+
 ### 验证
 
-- `npm test` **121 / 0**（0.6.0 是 119）
-- `npm pack` + 解包真 apply：`SMOKE OK version=0.6.1 routes=4 tools=4`
-- 四个 tool schema 逐个过宿主口径校验：全绿
+- `npm test` **122 / 0**（0.6.0 是 119；初版 121，本次 +1 条 ⑦a）
+- 四个 tool schema 过**从宿主抄出来的**校验规则：全绿（`check-plugin-schema.cjs` 4/0）
+- ⚠ **真机 `health.tools.registered === true` 尚未复验** —— 要重启 DSH 才加载新代码。
+  在那之前，本条的验收**不能算通过**。
 
 
 ## 0.6.0（2026-11-17）· 那根管子

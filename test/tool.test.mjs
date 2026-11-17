@@ -351,6 +351,39 @@ function collectDanglingRequired(node, p, out) {
   }
 }
 
+/**
+ * required **数组**挂在了 properties 里面（0.6.1 的病，比 0.6.0 更隐蔽）。
+ *
+ * 两种写法都长这样，看着都"像标准写法"：
+ *
+ *   对：{ type:'object', properties:{ id:{type:'string'} }, required:['id'] }
+ *   错：{ type:'object', properties:{ id:{type:'string'}, required:['id'] } }
+ *                                            ^^^^^^^^ 落在 properties 里面了
+ *
+ * 错的这种，`required` 会被当成一个叫 "required" 的**字段**，
+ * 它的值是个数组 → 宿主说 `properties.required must be a schema object` → 整批拒注册。
+ *
+ * ⚠ 我第一版的 ⑦ 只抓 `required: true`（布尔值）—— 于是 0.6.1 那批
+ *   **数组形式**的错写法一条都没抓到，121 条全绿，真机上四个工具照样全灭。
+ *   一条只能抓一半的守卫，比没有更危险：它让人以为验过了。
+ */
+function collectRequiredInsideProperties(node, p, out) {
+  if (!node || typeof node !== 'object') return
+  if (Array.isArray(node)) { node.forEach((x, i) => collectRequiredInsideProperties(x, p + '[' + i + ']', out)); return }
+  if (node.properties && typeof node.properties === 'object' && !Array.isArray(node.properties)) {
+    if (Object.hasOwn(node.properties, 'required')) {
+      out.push(p + '.properties.required（required 数组被塞进了 properties，宿主会当成字段）')
+    }
+    for (const [k, v] of Object.entries(node.properties)) {
+      collectRequiredInsideProperties(v, p + '.properties.' + k, out)
+    }
+  }
+  for (const [k, v] of Object.entries(node)) {
+    if (k === 'properties') continue
+    if (v && typeof v === 'object') collectRequiredInsideProperties(v, p + '.' + k, out)
+  }
+}
+
 test('⑦ output.schema 里不许出现属性级 required 布尔值（宿主会拒注册整批工具）', () => {
   const tools = buildTools({ callTool: async () => ({ ok: true }) })
   const defs = Array.isArray(tools) ? tools : Object.values(tools)
@@ -362,6 +395,18 @@ test('⑦ output.schema 里不许出现属性级 required 布尔值（宿主会�
   }
   assert.deepEqual(bad, [],
     '属性级 required 布尔值会被宿主拒掉整次注册 —— 改成父级 required: ["字段名"] 数组')
+})
+
+test('⑦a required 数组不许落在 properties 里面（0.6.1 的病）', () => {
+  const tools = buildTools({ callTool: async () => ({ ok: true }) })
+  const defs = Array.isArray(tools) ? tools : Object.values(tools)
+  const bad = []
+  for (const d of defs) {
+    if (d.output && d.output.schema) collectRequiredInsideProperties(d.output.schema, d.name + '.output.schema', bad)
+    if (d.parameters) collectRequiredInsideProperties(d.parameters, d.name + '.parameters', bad)
+  }
+  assert.deepEqual(bad, [],
+    'required 数组被塞进 properties 里了 —— 它必须在 properties 的**同级**，否则宿主整批拒注册')
 })
 
 test('⑦b 每个 required 数组里的名字都真的在同层 properties 里（防拼错）', () => {
