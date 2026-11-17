@@ -120,7 +120,7 @@ test('③ 插件对外只暴露一个 apply（换宿主时改这里，不改业�
 
 test('④ 方寸协议侧的模块不认识 DSH（它们是可搬走的部分）', () => {
   // 这些文件是"搬内核时不用动的"：只认 MCP 工具名、管道、JSONL、HTTP。
-  const pure = ['mcp-pipe.js', 'usage.js', 'cards.js', 'proof.js', 'tool.js', 'widget.js']
+  const pure = ['mcp-pipe.js', 'usage.js', 'cards.js', 'proof.js', 'tool.js', 'widget.js', 'dispatch.js']
   for (const file of pure) {
     const src = stripComments(fs.readFileSync(path.join(libDir, file), 'utf-8'))
     assert.ok(!/from\s+['"]@deepseek-ai\//.test(src), file + ' 不许 import DSH 包')
