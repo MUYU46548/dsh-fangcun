@@ -80,6 +80,7 @@
 | 41 | **会话要"落盘"得自己 `sessions.flush(session)`**：`session.append`/`followup` 只进内存，落盘是 `session/flush` 的活（`dsh-schedule` 每发一条都 await 一次）。探针会话在磁盘上只有一行头、零事件就是这个原因 | `plugin ⑩`、`dsh-schedule` `send()` 原文 |
 | 42 | ✅ **改完不必重启 DSH**：本机 `dsh-hmr` 是 active，**Plugin Manager 的一次操作会触发重组**，而重组"也替换**加载文件在磁盘上变过的插件**——包含 `node_modules` 下装的和 **`link:` 包的目标**"。所以 `plugin_manager set_plugin(enabled:true)` 一次（`target=include:dsh-fangcun`）就能让 0.6.4→0.6.5 在**运行中的进程里**生效（`health.plugin.version` 当场变 0.6.5，`compat.checkedAt` 刷新）。⚠ 前提是新代码**能被干净 import**（先 `node -e "import('./lib/index.js')"` 验一遍）：加载失败会把旧实例停掉并标 `failed`，那才是真的坏 | `dsh-hmr` README 第 50 行原文 + 2026-11-17 18:58 实测 |
 | 43 | ⚠ **`待验收` = 验收项全部验过，不是"差不多了"**（用户 2026-11-17 原话："没做完的东西就不该这样放，我除了签完成只有驳回"）。用户那一栏只有「完成 / 驳回」两个按钮，**没有"再等等"** —— 所以送一张自己心里知道还差东西的卡进去，等于逼他在两个都不对的选项里选。判据：卡上只要还留着「待复核 / 待真机 / 待重启 / TODO / 之一未验」这类字样，**就不许 move 到 `待验收`**；该留在 `进行中`，或拆小卡单独追。这是 agent 的错，不是用户的负担 | `prompt ①d` 钉着；2026-11-17 我把「派单管子」那张标着"待重启复核"的卡送审，用户当场指出 |
+| 44 | ✅ **`fangcun_write` 三条 action + 三道闸真机全通**（2026-11-17 19:50，此前只验过 `create`）：`update` 改正文 → `get_task` 确认落盘；`move` 待办→草稿 → `get_task` 报 `status=草稿`；`move`→`完成` **被拒**；`update`→`驳回` **被拒**；`create` 带 `status:完成` **被拒**。五条全是真调真拿拒绝，没有一条是"我以为它该报错"。⚠ 写工具的三道锁**都在插件侧先挡**，方寸本体那道（`tools.ts` 的 `move_status` 硬拒）还没被撞到过 —— 因为撞不到，这也正是第一道锁存在的理由（事实 31） | 2026-11-17 真机；`tool ③/③b/③c` 在真管道上站得住 |
 
 ## 3. 四条链路（改之前先看懂数据怎么走）
 
@@ -347,10 +348,10 @@ runner 是 **`windows-latest` + Git Bash**：插件只支持 Windows，`detect` 
    0.6.0/0.6.1 零注册（`required` 写法错）、0.6.2 注册上但 `parameters` 撞 `title` 保留字
    把整轮对话打挂、**0.6.3 才真通**。
    **仍缺**：模型经宿主真调一次 `fangcun_*` → `tools.jsonl` 里出现记录（自证链最后一环）。
-10. **`fangcun_write` 已在真机上跑过 `create`**（2026-11-17 18:13）：建草稿卡 → 真落盘、
-   标题/正文/标签/项目全对。**同一轮抓到一个 bug**：`create` 分支没转发 `status`，
-   传 `'草稿'` 落成 `'待办'` —— 0.6.4 已修（事实 38）。
-   仍**没跑过** `move` / `update`：那两条会改已有卡的状态，要等有真实需求时再验。
+10. **`fangcun_write` 三条 action 现已在真机全通**（2026-11-17 19:50，事实 44）：
+   `create`（18:13）、`update`（改正文后 `get_task` 确认）、`move`（待办↔草稿，`get_task` 报状态变）；
+   三道验收闸也逐个真调过，**全部被拒**（`move→完成`、`update→驳回`、`create 带 status:完成`）。
+   同一轮修过的 `create` 没转发 `status` 已由 0.6.4 修（事实 38）。
 
 11. **自造校验器是这轮事故的病根**（`0.6.0`/`0.6.1` 两次都是"我自己写的校验器说通过了"）。
    现在 `scripts/check-packed-schema.mjs` 是**拿宿主 app.asar 里的真校验器**判的，
