@@ -161,3 +161,59 @@ test('⑦ 投给会话的第一条消息：带上下文 + 明说缺哪几节 + �
   assert.match(text, /完成.*驳回.*签字/, '要提前说清两道锁')
   assert.match(text, /下一步该做什么/, '这就是派单的目的')
 })
+
+// ── 派单用途（2026-11-17 暮雨定案：「以后可以直接在 DSH 里派活做规划」）──
+//
+// 同一根管子上跑两种活：work = 马上干活，plan = 先做规划。
+// 两者的话术必须不同 —— 拿开工的话术去让它规划，它会直接开始改代码。
+
+test('⑧ 缺省 kind = work（老派单文件行为零破坏）', () => {
+  const raw = [
+    '<!-- fangcun-dispatch v1',
+    'project: sitian',
+    '-->',
+    '',
+    '正文',
+  ].join('\n')
+  assert.equal(parseDispatch(raw).kind, 'work', '没有 kind 字段的老派单必须是 work')
+})
+
+test('⑨ kind: plan 能解析，且乱写的值回落成 work（不抛、不猜新类型）', () => {
+  const mk = (k) => ['<!-- fangcun-dispatch v1', 'project: sitian', 'kind: ' + k, '-->', '', '正文'].join('\n')
+  assert.equal(parseDispatch(mk('plan')).kind, 'plan')
+  assert.equal(parseDispatch(mk('PLAN')).kind, 'plan', '大小写不敏感')
+  assert.equal(parseDispatch(mk('work')).kind, 'work')
+  assert.equal(parseDispatch(mk('乱写')).kind, 'work', '认不出的用途回落 work，不许静默变成 plan')
+})
+
+test('⑩ 规划派单的话术：要求出判据、不许拿砍功能当规划、要问用户拍板', () => {
+  const text = dispatchPrompt({
+    project: 'sitian', projectName: '司天', kind: 'plan', body: '# 司天现状',
+  })
+  assert.match(text, /方寸派单 · 规划/, '标题要标出这是规划派单')
+  assert.match(text, /不是让你马上改代码/, '要明确拦住直接开干')
+  for (const pre of ['cmd:', 'str:', 'num:', 'file:']) {
+    assert.ok(text.includes(pre), '四类判据前缀必须都提到，实际缺：' + pre)
+  }
+  assert.match(text, /写不出判据的条目不要写/, '没判据的条目不许写')
+  assert.match(text, /引不出依据的条目\*\*不许编/, '要禁止编依据')
+  assert.match(text, /不砍功能/, '用户 11-08 已定：不拿砍功能当规划')
+  assert.match(text, /只有用户能拍板/, '判断半必须回给用户')
+  assert.match(text, /fangcun_write/, '要告诉它怎么回写')
+  assert.doesNotMatch(text, /请据此判断\*\*下一步该做什么\*\*/, '规划派单不许复用开工话术')
+})
+
+test('⑪ 开工派单的话术不许带上规划那套（否则老用户突然被要求写判据）', () => {
+  const text = dispatchPrompt({ project: 'sitian', kind: 'work', body: '# 司天现状' })
+  assert.match(text, /方寸派单 · 开工/)
+  assert.match(text, /下一步该做什么/)
+  assert.doesNotMatch(text, /不是让你马上改代码/, 'work 派单不该说这句')
+  assert.doesNotMatch(text, /四类前缀|cmd:.*str:.*num:/, 'work 派单不该要求四类判据')
+})
+
+test('⑫ 两种派单的正文都原样带上（不许因为换用途把上下文丢了）', () => {
+  for (const kind of ['work', 'plan']) {
+    const text = dispatchPrompt({ project: 'sitian', kind, body: '使命：世界观地图可视化' })
+    assert.match(text, /使命：世界观地图可视化/, kind + ' 派单丢了正文')
+  }
+})

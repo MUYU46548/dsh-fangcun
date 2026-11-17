@@ -1,4 +1,57 @@
-# 变更记录
+﻿# 变更记录
+
+## 0.6.1（2026-11-17）· 模型工具其实一次都没注册上
+
+**这是 0.6.0 的真机验收结果：装上了，但四个模型工具一个都没有。**
+
+### 病
+
+0.6.0 装上并重启后，`health.json` 报：
+
+```
+tools.registered = false
+tools.error: unsupported JSON schema: schema.properties.connected.required is not supported
+             on type "boolean"; …items.items.properties.id.required is not supported on type "string"
+```
+
+根因：`lib/tool.js` 把必填写成了**属性上的布尔值**——
+
+```js
+connected: { type: 'boolean', required: true }     // ← 这种方言宿主不认
+```
+
+而宿主认的是**标准 JSON Schema**：`required` 是父对象上的**字符串数组**——
+
+```js
+{ type: 'object', properties: { connected: { type: 'boolean', … } }, required: ['connected', …] }
+```
+
+于是宿主拒掉整批注册：`fangcun_context / fangcun_tasks / fangcun_card / fangcun_write` **全部不可用**。
+
+### 为什么 114 条单测全绿也没抓到
+
+它们只断「定义了 `output.schema`」，**从没把 schema 喂给宿主的校验规则**。
+真正的判据是 `health.tools.registered === true` —— 而那一步只有真机能验。
+
+**这是 0.6.0 最贵的教训**：单测绿 ≠ 工具能用。
+
+### 修
+
+- `lib/tool.js`：47 处属性级 `required: true` 全部提升成**父级 `required: [...]` 数组**
+  （含 `items` / `decisions` / `cards` 三个数组型字段——它们是多行对象，
+  第一版转换器漏了它们，是「转换成功 0 残留」却少字段的同一个形态）
+- 新增 `scripts/fix-tool-schema.mjs`：可重跑的转换器（`--dry` 先看）
+- 新增两条测试 `⑦ / ⑦b`：
+  - 属性级 `required` 布尔值 → 红
+  - `required` 数组里的名字不在同层 `properties` 里 → 红
+  - **反例自证过**：把 0.6.0 的旧文件放回去，新断言精确变红 1 条
+
+### 验证
+
+- `npm test` **121 / 0**（0.6.0 是 119）
+- `npm pack` + 解包真 apply：`SMOKE OK version=0.6.1 routes=4 tools=4`
+- 四个 tool schema 逐个过宿主口径校验：全绿
+
 
 ## 0.6.0（2026-11-17）· 那根管子
 

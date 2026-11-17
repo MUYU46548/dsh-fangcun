@@ -309,3 +309,69 @@ test('⑥ makePipeCallTool 造出来的东西形状对（不真连管道）', ()
   const fn = makePipeCallTool({ pipePath: '\\\\.\\pipe\\不存在', version: '0.0.0' })
   assert.equal(typeof fn, 'function')
 })
+
+// ── ⑦ 工具 schema 必须是**宿主认的标准 JSON Schema** ─────────────────────
+//
+// 病（2026-11-17 真机抓到，0.6.0 装上后）：
+//   `health.tools.registered = false`
+//   unsupported JSON schema: schema.properties.connected.required is not supported
+//   on type "boolean"; …items.items.properties.id.required is not supported on type "string"
+//
+// 因为 `lib/tool.js` 把必填写成了**属性上的布尔值**：
+//   `connected: { type: 'boolean', required: true }`
+// 而宿主认的是标准 JSON Schema：`required` 是父对象上的**字符串数组**：
+//   `{ type: 'object', properties: {...}, required: ['connected', ...] }`
+//
+// ⚠ 为什么原有那批断言全绿也没抓到：它们只断"定义了 output.schema"，
+//   **从没把 schema 喂给宿主的校验规则**。下面两条就是那台缺席的校验器。
+
+/** 宿主拒绝规则的口径：任何属性对象里出现 required 布尔值 → 整次注册失败 */
+function collectPropertyLevelRequired(node, p, out) {
+  if (!node || typeof node !== 'object') return
+  if (Array.isArray(node)) { node.forEach((x, i) => collectPropertyLevelRequired(x, p + '[' + i + ']', out)); return }
+  for (const [k, v] of Object.entries(node)) {
+    if (v && typeof v === 'object' && !Array.isArray(v)) {
+      if ('required' in v && typeof v.required === 'boolean') out.push(p + '.' + k + '.required')
+      collectPropertyLevelRequired(v, p + '.' + k, out)
+    }
+  }
+}
+
+/** required 数组里的每个名字都必须真的在**同层** properties 里 */
+function collectDanglingRequired(node, p, out) {
+  if (!node || typeof node !== 'object') return
+  if (Array.isArray(node)) { node.forEach((x, i) => collectDanglingRequired(x, p + '[' + i + ']', out)); return }
+  if (Array.isArray(node.required) && node.properties) {
+    for (const k of node.required) {
+      if (!(k in node.properties)) out.push(p + ' 要求了不存在的字段 ' + k)
+    }
+  }
+  for (const [k, v] of Object.entries(node)) {
+    if (v && typeof v === 'object') collectDanglingRequired(v, p + '.' + k, out)
+  }
+}
+
+test('⑦ output.schema 里不许出现属性级 required 布尔值（宿主会拒注册整批工具）', () => {
+  const tools = buildTools({ callTool: async () => ({ ok: true }) })
+  const defs = Array.isArray(tools) ? tools : Object.values(tools)
+  assert.ok(defs.length > 0, '一个工具都没建出来')
+  const bad = []
+  for (const d of defs) {
+    if (d.output && d.output.schema) collectPropertyLevelRequired(d.output.schema, d.name + '.output.schema', bad)
+    if (d.parameters) collectPropertyLevelRequired(d.parameters, d.name + '.parameters', bad)
+  }
+  assert.deepEqual(bad, [],
+    '属性级 required 布尔值会被宿主拒掉整次注册 —— 改成父级 required: ["字段名"] 数组')
+})
+
+test('⑦b 每个 required 数组里的名字都真的在同层 properties 里（防拼错）', () => {
+  const tools = buildTools({ callTool: async () => ({ ok: true }) })
+  const defs = Array.isArray(tools) ? tools : Object.values(tools)
+  const bad = []
+  for (const d of defs) {
+    if (d.output && d.output.schema) collectDanglingRequired(d.output.schema, d.name + '.output.schema', bad)
+    if (d.parameters) collectDanglingRequired(d.parameters, d.name + '.parameters', bad)
+  }
+  assert.deepEqual(bad, [], 'required 里的名字必须在同层 properties 里 —— 拼错会被宿主拒')
+})
+
