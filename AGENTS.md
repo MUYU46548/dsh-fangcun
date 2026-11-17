@@ -68,6 +68,9 @@
 | 30 | **自证必须认两条命名路径**：`mcp__fangcun__<tool>`（DSH 生成的 MCP 工具名）与 `fangcun_<x>`（插件自己注册的）。只认前者会让 0.4.0 的插件工具**全部不被计入** —— `proof` 与 `cards` 双双失明。⚠ 两条路径的短名形状不同：MCP 那条要去前缀（`mcp__fangcun__update_task`→`update_task`），插件那条**不能去**（`fangcun_write` 去前缀会变成 `write`，撞上宿主的写文件工具） | `cards ①b`、`cards ③d③e`（2026-11-17 这个坑是自己挖的） |
 | 31 | **`完成` / `驳回` 的硬拒在方寸本体，不在插件**：`desktop/src/main/mcp/tools.ts` 的 `move_status` 直接回 `isError` + `suggested: '待验收'`。插件侧另有一道 `SIGNOFF_STATUSES`（第一道锁），理由是"不该先撞墙才知道"+"不许赌锁的位置" | `tool ③b③c`、方寸 `tools.ts:1203` |
 | 32 | **防腐层现状**：所有 DSH 概念（`root.get/inject/on/effect`、`webServer.register`、`systemPrompt`、`tools.register`）**已集中在 `lib/index.js`**；`mcp-pipe/usage/cards/proof/tool/status/widget` 全是方寸协议侧（换宿主不用动）。用 `test/layering.test.mjs` 把它钉成 CI 规则，不靠纪律 | `layering ①–⑤`（做过反例验证：往 `cards.js` 塞 `root.get('webServer')` → 2 例失败） |
+| 33 | ⚠ **`connected` 与 `total` 必须分开报**：方寸没开时若只回 `total: 0`，模型会读成「方寸里没有卡」并去建重复卡（0.4.1 的真实缺陷）。所以读工具回 `connected:false` + `hint`，渲染文案明写「不是"没有卡"」 | `tool ④④b`（2026-11-17 修自己挖的坑） |
+| 34 | **三件套分工**：插件只报「方寸」这一环（装没装 / 跑没跑）；「DSH 装没装」在插件里没有意义（插件就活在 DSH 进程里），由方寸侧 `services/dshPlugin.ts` 报。两边各报自己看得见的 —— 否则就是「同一个数字三个地方各写各的」 | `link ⑤`：插件侧不许有 `dsh` 状态字段 |
+| 35 | **装了没跑 ≠ 要重启 DSH**：方寸打开就自动通（命名管道按需连接，插件 60 秒重试）。提示语必须写「不用重启 DSH」，否则用户会去重启整个应用 | `link ②` |
 
 ## 3. 四条链路（改之前先看懂数据怎么走）
 
@@ -176,8 +179,9 @@ electron-updater 目录 / 开始菜单与桌面快捷方式 / Program Files 与 
 | **按卡记账**：note 放得下才带 `card=`，放不下整段不带（不写半截 id），原有 `cache_read` 口径不被挤掉，note ≤ 120 | `cards ④` |
 | **挂件口径照方寸的 status 数**（在办/待拍板），`focus` 只配可见列表里的标题，没有就只给卡号 | `cards ⑤`、`widget-dom ⑱⑱b` |
 | apply 真的注册了提示词；没有 `systemPrompt` 服务时不假装成功、其它功能照旧；方寸工具调用落 `tools.jsonl` | `plugin ⑧⑨` |
-| **模型工具是真 ToolDefinition**（name/description/parameters/output/execute 齐全）；**只白名单转发**（不在 `create/update/move` 里的 action 就抛）；参数不全就抛不猜；输出有界且截断明说；方寸没开时读回空、写回 `ok:false` 不谎报 | `tool ①②③④⑤` |
+| **模型工具是真 ToolDefinition**（name/description/parameters/output/execute 齐全）；**只白名单转发**（不在 `create/update/move` 里的 action 就抛）；参数不全就抛不猜；输出有界且截断明说；**连不上时 `connected:false` + hint，不许回 `total:0` 冒充"没有卡"** | `tool ①②③④④b⑤` |
 | 没有 `tools` 服务时 `health.tools.registered=false` + 写明原因，不假装注册 | `plugin ⑨` |
+| **三件套只报自己那一环**：`health.link` 报方寸装没装/跑没跑 + hint；插件侧不许有 `dsh` 状态字段；没装给下载页、装了没跑说「打开方寸」且**明说不用重启 DSH** | `link ①②③④⑤` |
 | **engines.dsh 不设上界**（写上界会让升级后插件静默消失）；`dsh.compatibility.dsh` 同样只有下限 | `compat ①` |
 | **兼容性只提醒不退出**：六项宿主能力三态齐全；空宿主/抛异常的探测都不外泄；`on` 能调用但会抛要报 degraded 而不是 ok | `compat ②–⑥` |
 | **自证认两条命名路径**：MCP 短名与插件工具名都计入；`fangcun_tasks`/`fangcun_card` 只算查、`fangcun_write` 算回写；只读工具不许算回写 | `cards ①b`、`cards ③d③e` |
@@ -190,7 +194,7 @@ electron-updater 目录 / 开始菜单与桌面快捷方式 / Program Files 与 
 ## 5. 本地怎么跑
 
 ```powershell
-npm test        # 98 条，不需要 DSH、不需要真方寸（真起假管道）
+npm test        # 104 条，不需要 DSH、不需要真方寸（真起假管道）
 npm pack        # 验发布包；CI 会把 tgz 解出来真 apply 一次
 ```
 

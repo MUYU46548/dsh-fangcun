@@ -177,16 +177,21 @@ test('③c 单卡正文也封顶，超了要说出来', () => {
   assert.equal(typeof empty.bodyLength, 'number')
 })
 
-test('④ 方寸没开：读工具回空、写工具如实报失败，都不假装成功', async () => {
+test('④ 方寸没开：读工具如实报「未连接」，写工具如实报失败 —— 都不许撒谎', async () => {
   const boom = {
     async callTool() { throw new Error('连接失败：pipe 不存在') },
   }
   const t = byName(buildTools(boom))
 
-  // 读：方寸没开是常态，回空列表而不是抛
+  // 读：**不许回 "0 张未结"** —— 那会让模型以为方寸里没有卡，去建重复的（0.4.1 的坑）
   const listed = await t.fangcun_tasks.execute({})
+  assert.equal(listed.connected, false, '连不上必须 connected=false')
   assert.equal(listed.total, 0)
-  assert.equal(listed.truncated, false)
+  assert.match(listed.hint, /没在运行|下载/, 'hint 要给下一步，不能只说"失败"')
+  // 渲染文案必须说"未连接"，且明说不是"没有卡"
+  const text = t.fangcun_tasks.output.render({}, listed)[0].text
+  assert.match(text, /未连接/)
+  assert.match(text, /不是"没有卡"/)
 
   // 写：必须如实说失败（用户看不到"已写入"的谎）
   const w = await t.fangcun_write.execute({ action: 'move', id: 'c1', status: '待验收' })
@@ -195,8 +200,20 @@ test('④ 方寸没开：读工具回空、写工具如实报失败，都不假�
   assert.equal(w.tool, 'move_status')
 
   // 渲染文案要跟着 ok 走
-  const text = t.fangcun_write.output.render({}, w)[0].text
-  assert.match(text, /失败/)
+  const wtext = t.fangcun_write.output.render({}, w)[0].text
+  assert.match(wtext, /失败/)
+})
+
+test('④b 连上但没有卡：connected=true 且 total=0（与"没连上"必须能区分）', async () => {
+  const { deps } = fakeDeps({ list_tasks: [] })
+  const t = byName(buildTools(deps))
+  const listed = await t.fangcun_tasks.execute({})
+  assert.equal(listed.connected, true, '连上了就是 true，哪怕一张卡都没有')
+  assert.equal(listed.total, 0)
+  assert.equal(listed.hint, '', '连上时不该给"去开方寸"这种提示')
+  const text = t.fangcun_tasks.output.render({}, listed)[0].text
+  assert.match(text, /0 张未结/)
+  assert.ok(!/未连接/.test(text))
 })
 
 test('⑤ 工具真发对参数：list_tasks 带 view/project/status，create 带全字段', async () => {
