@@ -1,5 +1,5 @@
 /**
- * 发布包里的工具 schema 过宿主门禁（2026-11-17）
+ * 发布包里的工具 schema 过**宿主门禁**（2026-11-17）
  *
  * ## 为什么单测不够，非要再验一遍"解包后的东西"
  *
@@ -10,92 +10,77 @@
  * 单测看的是源码，冒烟看的是"有没有四个工具"，**两者都不看 schema 合法不合法**。
  * 而用户装的是 tgz，不是源码 —— 所以这里对**解出来的包**再验一次。
  *
- * ## 判据从哪来
+ * ## 判据从哪来（关键：跑宿主的真代码，不是照规则重写一遍）
  *
- * 抄的是**宿主 app.asar 里 `checkSchemaNode` 的真实规则**，不是自己发明一套：
- *   · 节点只许 type/oneOf/properties/required/additionalProperties/items/enum/const + 注解；
- *   · properties / required / additionalProperties 只许挂 `type:'object'`；
- *   · items 只许挂 `type:'array'`；
- *   · **properties 的每个值必须本身是 schema 对象** —— 塞数组进去就是这条会红。
+ * 早期版本是"从 app.asar 里把规则抄成一段代码"。**那等于我自己当裁判** ——
+ * 抄漏一条就是一次假绿（0.6.1 就是这么过去的）。
+ *
+ * 现在改成：从已安装 DSH 的 `app.asar` 里把 `@deepseek-ai/*` 整个解到临时目录，
+ * 直接 `import` 宿主的 `@deepseek-ai/dsh-tools/lib/types/json-schema.js`，
+ * 调它的 **`assertSupportedJsonSchema`**。
+ * 宿主怎么判，这里就怎么判 —— 连报错文案都是宿主自己吐的
+ * （`schema.properties.required must be a schema object` 与真机 health 逐字一致）。
+ *
+ * ## 找不到宿主时怎么办
+ *
+ * 明写 `SKIP` 并**不算通过**。别的机器上没装 DSH 就没法验，这必须说出来，
+ * 不能静默变绿 —— 那正是这次踩过的坑。
  *
  * 用法：
- *   node scripts/check-packed-schema.mjs <解包目录>   例：.pkg/package
- *   node scripts/check-packed-schema.mjs             # 默认验工作区 ./lib
+ *   node scripts/check-packed-schema.mjs <解包目录>    例：.pkg/package
+ *   node scripts/check-packed-schema.mjs              # 默认验工作区 ./lib
+ *   FC_HOST_ASAR=<path> node scripts/check-packed-schema.mjs   # 指定 app.asar
+ *
+ * ⚠ asar 头（实测四组数字推出来的，别再猜）：
+ *   u32@0=4  u32@4=头部 pickle 长度  u32@8=含 padding 的 JSON 长度  u32@12=JSON 本身长度
+ *   · header JSON 在 16，长度取 u32@12
+ *   · 数据区基址 = 8 + u32@4   ← 用 16+u32@12 会差几字节，解出来的文件带别人尾巴
  */
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-const SCHEMA_TYPES = ['object', 'array', 'string', 'number', 'integer', 'boolean', 'null']
-const CONSTRAINT = new Set(['type', 'oneOf', 'properties', 'required', 'additionalProperties', 'items', 'enum', 'const'])
-const ANNOTATION = new Set(['title', 'description', '$comment', 'default', 'examples', 'deprecated', 'readOnly', 'writeOnly'])
-const ALLOWED_FOR = {
-  properties: ['object'],
-  required: ['object'],
-  additionalProperties: ['object'],
-  items: ['array'],
-  enum: ['string', 'number', 'integer', 'boolean', 'null'],
-  const: ['string', 'number', 'integer', 'boolean', 'null'],
+const HOST_ASAR_CANDIDATES = [
+  process.env.FC_HOST_ASAR,
+  'C:/Users/muyu/AppData/Local/Programs/DeepSeek Harness/resources/app.asar',
+  path.join(process.env.LOCALAPPDATA || '', 'Programs/DeepSeek Harness/resources/app.asar'),
+].filter(Boolean)
+
+function findHostAsar() {
+  for (const p of HOST_ASAR_CANDIDATES) {
+    try { if (fs.statSync(p).isFile()) return p } catch { /* 下一个 */ }
+  }
+  return ''
 }
 
-const isPlainRecord = (v) => v !== null && typeof v === 'object' && !Array.isArray(v)
+/** 从 app.asar 里把 @deepseek-ai/* 解到临时目录，返回 { tmp, jsonSchema } */
+function unpackHost(asar) {
+  const buf = fs.readFileSync(asar)
+  const headerSize = buf.readUInt32LE(12)
+  const hdr = JSON.parse(buf.slice(16, 16 + headerSize).toString('utf8'))
+  const base = 8 + buf.readUInt32LE(4)
 
-function validateSchema(root, rootPath = 'schema') {
-  const violations = []
-  const stack = [{ node: root, path: rootPath }]
-  const seen = new Set()
-  while (stack.length) {
-    const { node, path: p } = stack.pop()
-    if (!isPlainRecord(node)) { violations.push(`${p} must be a schema object`); continue }
-    if (seen.has(node)) { violations.push(`${p} is circular`); continue }
-    seen.add(node)
-    for (const key of Object.keys(node)) {
-      if (!CONSTRAINT.has(key) && !ANNOTATION.has(key)) violations.push(`${p}.${key} is not a supported keyword`)
-    }
-    const hasType = Object.hasOwn(node, 'type')
-    const hasOneOf = Object.hasOwn(node, 'oneOf')
-    if (hasType && hasOneOf) { violations.push(`${p} cannot declare both type and oneOf`); continue }
-    if (!hasType) { violations.push(`${p} requires type`); continue }
-    if (hasOneOf) continue
-    const type = node.type
-    if (typeof type !== 'string' || !SCHEMA_TYPES.includes(type)) {
-      violations.push(`${p}.type must be one of ${SCHEMA_TYPES.join('/')}`)
-      continue
-    }
-    for (const [key, types] of Object.entries(ALLOWED_FOR)) {
-      if (Object.hasOwn(node, key) && !types.includes(type)) {
-        violations.push(`${p}.${key} is not supported on type "${type}"`)
-      }
-    }
-    if (type === 'object') {
-      if (Object.hasOwn(node, 'required')) {
-        const req = node.required
-        if (!Array.isArray(req) || !req.every((x) => typeof x === 'string')) {
-          violations.push(`${p}.required must be an array of strings`)
-        } else if (Object.hasOwn(node, 'properties') && isPlainRecord(node.properties)) {
-          for (const name of req) {
-            if (!Object.hasOwn(node.properties, name)) violations.push(`${p}.required 要求了不存在的字段 "${name}"`)
-          }
-        }
-      }
-      if (Object.hasOwn(node, 'properties')) {
-        if (!isPlainRecord(node.properties)) {
-          violations.push(`${p}.properties must be an object of schemas`)
-        } else {
-          for (const [name, child] of Object.entries(node.properties)) {
-            if (!isPlainRecord(child)) {
-              violations.push(`${p}.properties.${name} must be a schema object（实际是 ${Array.isArray(child) ? 'array' : typeof child}）`)
-            } else {
-              stack.push({ node: child, path: `${p}.properties.${name}` })
-            }
-          }
-        }
-      }
-    } else if (type === 'array' && Object.hasOwn(node, 'items')) {
-      stack.push({ node: node.items, path: `${p}.items` })
-    }
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hostschema-'))
+  const PREFIX = '/dsh/node_modules/@deepseek-ai/'
+  let count = 0
+  const walk = (node, prefix) => {
+    if (node.files) { for (const [k, v] of Object.entries(node.files)) walk(v, prefix + '/' + k); return }
+    if (!prefix.startsWith(PREFIX)) return
+    const rel = prefix.slice('/dsh/node_modules/'.length)
+    const dest = path.join(tmp, 'node_modules', rel)
+    fs.mkdirSync(path.dirname(dest), { recursive: true })
+    const off = base + Number(node.offset)
+    fs.writeFileSync(dest, buf.slice(off, off + node.size).toString('utf8'), 'utf8')
+    count++
   }
-  return violations
+  walk(hdr, '')
+
+  return {
+    tmp,
+    count,
+    jsonSchema: path.join(tmp, 'node_modules', '@deepseek-ai', 'dsh-tools', 'lib', 'types', 'json-schema.js'),
+  }
 }
 
 const target = process.argv[2] || '.'
@@ -105,27 +90,71 @@ if (!fs.existsSync(toolPath)) {
   process.exit(1)
 }
 
-const { buildTools } = await import(pathToFileURL(toolPath).href)
-const tools = buildTools({ callTool: async () => ({ ok: true }) })
-const defs = Array.isArray(tools) ? tools : Object.values(tools)
-
-console.log(`== 发布包 schema 过宿主门禁（${toolPath}）==`)
-let bad = 0
-for (const d of defs) {
-  const vs = []
-  // parameters 是"字段名→schema"的记录，不是完整 schema，包一层再验
-  if (d.parameters) vs.push(...validateSchema({ type: 'object', properties: d.parameters, required: [] }, `${d.name}.parameters`))
-  if (d.output && d.output.schema) vs.push(...validateSchema(d.output.schema, `${d.name}.output.schema`))
-  else vs.push(`${d.name}.output.schema 缺失`)
-  if (vs.length === 0) console.log(`PASS  ${d.name}`)
-  else { bad++; console.log(`FAIL  ${d.name}`); vs.forEach((v) => console.log(`        · ${v}`)) }
+const hostAsar = findHostAsar()
+if (!hostAsar) {
+  console.log('SKIP 这台机器找不到 DSH 的 app.asar —— 没法用宿主真校验器验。')
+  console.log('     SKIP 不算通过：装 DSH 的机器上必须真跑一次。')
+  console.log('     指定位置：FC_HOST_ASAR=<...>/app.asar')
+  console.log('RESULT SKIP（未验，不是通过）')
+  process.exit(0)
 }
 
-if (bad) {
-  console.log('')
-  console.log('⚠ 宿主会整批拒注册 → 装上去后模型侧一个方寸工具都没有（health.tools.registered=false）')
-  console.log(`RESULT ${defs.length - bad} / ${bad}`)
+const { tmp, count, jsonSchema } = unpackHost(hostAsar)
+if (!fs.existsSync(jsonSchema)) {
+  console.log(`FAIL 宿主包里没有 json-schema.js（解出 ${count} 个文件）`)
   process.exit(1)
 }
-console.log('')
-console.log(`RESULT ${defs.length} / 0 —— 全部能过宿主门禁`)
+
+let failed = false
+try {
+  const host = await import(pathToFileURL(jsonSchema).href)
+  const assertFn = host.assertSupportedJsonSchema
+  if (typeof assertFn !== 'function') {
+    console.log('FAIL 宿主模块没导出 assertSupportedJsonSchema')
+    process.exit(1)
+  }
+
+  const { buildTools } = await import(pathToFileURL(toolPath).href)
+  const tools = buildTools({ callTool: async () => ({ ok: true }) })
+  const defs = Array.isArray(tools) ? tools : Object.values(tools)
+
+  console.log(`== 发布包 schema 过宿主真校验器（${defs.length} 个工具）==`)
+  console.log(`   宿主：${hostAsar}`)
+  console.log(`   包：  ${toolPath}`)
+
+  for (const d of defs) {
+    let ok = true
+    const cases = [
+      // parameters 在宿主契约里是"字段名→schema"的记录，不是完整 schema，包一层再验
+      ['parameters', d.parameters ? { type: 'object', properties: d.parameters, required: [] } : null],
+      ['output.schema', d.output && d.output.schema],
+    ]
+    for (const [label, schema] of cases) {
+      if (!schema) { console.log(`FAIL  ${d.name}.${label} 缺失`); ok = false; continue }
+      try {
+        assertFn(schema)
+      } catch (e) {
+        ok = false
+        console.log(`FAIL  ${d.name}.${label}`)
+        const v = e && e.violations
+        if (Array.isArray(v)) v.slice(0, 6).forEach((x) => console.log(`        · ${x}`))
+        else console.log(`        · ${(e && e.message) || e}`)
+      }
+    }
+    if (ok) console.log(`PASS  ${d.name}`)
+    else failed = true
+  }
+
+  if (failed) {
+    console.log('')
+    console.log('⚠ 宿主会整批拒注册 → 装上去后模型侧一个方寸工具都没有（health.tools.registered=false）')
+    console.log('RESULT 有工具没通过')
+  } else {
+    console.log('')
+    console.log(`RESULT ${defs.length} / 0 —— 宿主全部接受`)
+  }
+} finally {
+  try { fs.rmSync(tmp, { recursive: true, force: true }) } catch { /* ignore */ }
+}
+
+process.exit(failed ? 1 : 0)
