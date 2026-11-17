@@ -1,9 +1,27 @@
 # 变更记录
 
-## 0.6.5（2026-11-17）· 管子真的通了一次；`fangcun_context` 长出「上次做到哪」
+## 0.6.5（2026-11-17）· 管子真的通了一次；压缩用量进账；`fangcun_context` 长出「上次做到哪」
 
-两件事：**派单那条管子此前一次都没跑过**（不是界面没入口——本机安装包里那个按钮一直在），
-以及 `fangcun_*` 那四个工具**没有存在的理由**（模型有 46 个同名 MCP 工具可用）。
+三件事：**派单那条管子此前一次都没跑过**（不是界面没入口——本机安装包里那个按钮一直在）；
+**压缩那次调用的 token 一直没进账**；以及 `fangcun_*` 那四个工具**没有存在的理由**
+（模型有 46 个同名 MCP 工具可用）。
+
+### 〇、压缩用量现在记账（用户 2026-11-17："压缩用量该接（也算损耗）"）
+
+**为什么不会重复记账**（这是接它的唯一依据，不是"应该没问题"）：压缩走的是
+`ctx.llm.stream(...)`（`dsh-compaction-basic` 直接调），**不经过 agent loop**，所以它不产生
+`assistant/message`；反过来 agent loop 的 `assistant/message` 也从不带 `compactionId` —— **两条来源互斥**。
+
+**为什么不并进某一轮**：`compaction/summary` **没有 `turn` 字段**（手动压缩时
+`compaction/start.turn` 甚至为 null），并进去等于把压缩的钱记到那轮头上。
+所以用独立幂等键 `sessionId#compact-<compactionId>`，`note` 带 `compaction=1`。
+
+口径与轮次一致：`prompt_tokens = input + cacheRead`。`usage` 缺失 / 零 token / 没有 `compactionId`
+→ **一律不记**（宁可少报也不记假的）。真账本实收一条：`prompt=48000`（input 8000 + cacheRead 40000）。
+
+**顺手修掉一个真 bug**：幂等以前只查 `sent.jsonl`（**已发**），而 `sent` 是发出去之后才落盘的 ——
+同一事件**在一个 flush 周期内来两次**就会入队两遍。现在**同时查 `queue`（已入队未发）**。
+⚠ 轮次路径中了同样一枪，一起修了（由新测试 `usage ⑩c` 抓到）。
 
 ### 一、派单管子：现在点一下，开出来的是**会干活**的会话
 

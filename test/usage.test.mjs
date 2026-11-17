@@ -324,3 +324,119 @@ test('⑤ 零 token 的轮次不产生记录；会话销毁时结算未结算的
     fs.rmSync(home, { recursive: true, force: true })
   }
 })
+
+// ── 压缩用量（事实 10g）────────────────────────────────────────────────
+// 用户 2026-11-17 拍板："压缩用量该接（也算损耗）"。
+// 这一组钉住的**不是"能记"**，而是"记了不会多报一行、不会并错轮次"。
+
+/** 造一条 compaction/summary（形状照 SessionEventMap 原文） */
+function feedCompaction(ledger, sessionId, { compactionId, input, cache, output, model }) {
+  ledger.onSessionEvent(sessionId, {
+    type: 'compaction/summary',
+    data: {
+      compactionId,
+      summary: [{ type: 'text', text: '摘要' }],
+      shadowedRange: { start: 1, end: 9 },
+      shadowedSeqs: [1, 2, 3],
+      shadowedTokenCount: 5000,
+      provider: 'deepseek',
+      model: model || 'deepseek/deepseek-v4.1-flash',
+      usage: { inputTokens: input, cacheReadTokens: cache, outputTokens: output },
+    },
+  })
+}
+
+test('⑩ 压缩用量要记账，口径与轮次一致（prompt = input + cacheRead）', () => {
+  const home = tmpHome()
+  try {
+    const ledger = new UsageLedger({ home, pipePath: '' })
+    feedCompaction(ledger, 'sess-compact', { compactionId: 'c1', input: 3000, cache: 20000, output: 400 })
+    assert.equal(ledger.pendingCount(), 1, '压缩那一次调用必须进账（用户 2026-11-17 拍板）')
+
+    const rec = JSON.parse(fs.readFileSync(usagePaths(home).outbox, 'utf-8').trim())
+    assert.equal(rec.key, 'sess-compact#compact-c1', '键要与轮次键分区，且带 compactionId')
+    assert.equal(rec.payload.prompt_tokens, 23000, 'prompt 必须含 cache_read（与轮次同一口径）')
+    assert.equal(rec.payload.completion_tokens, 400)
+    assert.equal(rec.payload.model, 'deepseek/deepseek-v4.1-flash')
+    assert.match(rec.payload.note, /compaction=1/)
+    assert.match(rec.payload.note, /cache_read=20000/)
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('⑩b 压缩**不与轮次重复记账**：同会话同轮次，两条各记一行、互不吞', () => {
+  const home = tmpHome()
+  try {
+    const ledger = new UsageLedger({ home, pipePath: '' })
+    // 先是一轮普通对话
+    feedTurn(ledger, 'sess-both', 7, [{ input: 100, cache: 900, output: 50 }])
+    // 然后压缩（注意：压缩没有 turn 字段，不该被并进第 7 轮）
+    feedCompaction(ledger, 'sess-both', { compactionId: 'c9', input: 500, cache: 1500, output: 60 })
+
+    assert.equal(ledger.pendingCount(), 2, '两条来源各一行 —— 压缩不覆盖、不吞掉那一轮')
+    const keys = fs.readFileSync(usagePaths(home).outbox, 'utf-8').trim().split('\n')
+      .map((l) => JSON.parse(l).key)
+    assert.deepEqual(keys, ['sess-both#7', 'sess-both#compact-c9'])
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('⑩c 压缩幂等：同一条事件重放 / 同 compactionId 再来一次，只记一次', () => {
+  const home = tmpHome()
+  try {
+    const ledger = new UsageLedger({ home, pipePath: '' })
+    const ev = { compactionId: 'c-dup', input: 10, cache: 90, output: 5 }
+    feedCompaction(ledger, 'sess-dup', ev)
+    feedCompaction(ledger, 'sess-dup', ev)
+    assert.equal(ledger.pendingCount(), 1, '重放不能重复记账')
+
+    // 已发出的也应挡住（重启后 sent 已落盘，重放历史事件不该再发）
+    const restart = new UsageLedger({ home, pipePath: '' })
+    restart.sent.add('sess-dup#compact-c-dup')
+    feedCompaction(restart, 'sess-dup', ev)
+    assert.equal(restart.pendingCount(), 1, '已记账的 compactionId 不许再入队')
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('⑩d 压缩的脏数据一律不记（没 usage / 零 token / 没 compactionId）', () => {
+  const home = tmpHome()
+  try {
+    const ledger = new UsageLedger({ home, pipePath: '' })
+    // 没有 usage（老宿主 / 走了别的路径）
+    ledger.onSessionEvent('s-a', {
+      type: 'compaction/summary',
+      data: { compactionId: 'c-x', summary: [], shadowedRange: { start: 1, end: 2 },
+        shadowedSeqs: [], shadowedTokenCount: 0, provider: 'p', model: 'm' },
+    })
+    // 零 token
+    feedCompaction(ledger, 's-b', { compactionId: 'c-y', input: 0, cache: 0, output: 0 })
+    // 没有 compactionId —— 不记，否则重启后无法判重，会反复记同一笔
+    ledger.onSessionEvent('s-c', {
+      type: 'compaction/summary',
+      data: { usage: { inputTokens: 5, cacheReadTokens: 5, outputTokens: 5 }, model: 'm' },
+    })
+    assert.equal(ledger.pendingCount(), 0, '这些都不该产生记录（宁可少报也不记假的）')
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('⑩e 压缩也能带卡号（与轮次共用同一段 note 逻辑，≤120 字）', () => {
+  const home = tmpHome()
+  try {
+    const ledger = new UsageLedger({
+      home, pipePath: '',
+      cardsFor: (id, turn) => (turn === -1 ? 'task-20261117-001' : ''),
+    })
+    feedCompaction(ledger, 'sess-card', { compactionId: 'c-k', input: 1, cache: 1, output: 1 })
+    const rec = JSON.parse(fs.readFileSync(usagePaths(home).outbox, 'utf-8').trim())
+    assert.match(rec.payload.note, /card=task-20261117-001/, '压缩也该按卡归因')
+    assert.ok(rec.payload.note.length <= 120, 'note 不许超 120 字')
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})

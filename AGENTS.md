@@ -45,7 +45,7 @@
 | 10d | 想收**所有** agent 的会话（含子代理）要传 `{ global: true }`：`EventOptions.global` 原文 "Receive the event regardless of context filter checks" —— 只放宽过滤，**不会重复投递** | `Context.on` 类型声明 + `history follow` 用法 |
 | 10e | **`turn` 不会回绕**：`const turn = phase.turn + 1`，`phase.turn` 由持久投影恢复（`stateOf(session,'turnBoundary')?.lastTurn ?? 0`）。压缩与重启都不动它；只有投影彻底缺失才从 0 开始，而那基本等于新会话 | `AgentLoop` 构造函数 + `turnBoundary` 投影 |
 | 10f | **宿主里没有 `subagent/start\|end` 事件**。判子代理看 `SessionHeader`：`origin:'subagent'` / `parentSession` / `delegationDepth` | `SessionHeader` 类型声明原文 |
-| 10g | ⚠ **未解**：`compaction/summary` 自带 `usage`，压缩那次调用的 token 现在**没进账**。但它是否同时也体现为一条 `assistant/message` 还没证实（生产端用 spread 拼对象，静态追不到）。**先真机跑出一次压缩、对比两边，再决定接不接** —— 接错就是多报账，比少报更糟 | `compaction/summary` 类型声明 |
+| 10g | ✅ **已解（2026-11-17）**：`compaction/summary` 自带 `usage`，压缩那次调用**以前没进账**，现在**接了**（用户拍板："压缩用量该接（也算损耗）"）。**为什么不重复**：压缩走的是 `ctx.llm.stream(...)`（`dsh-compaction-basic` 直接调），**不经过 agent loop**，所以它不产生 `assistant/message`；反过来 agent loop 的 `assistant/message` 也从不带 `compactionId` —— 两条来源互斥，接它**不会多报一行**。**为什么不并进某一轮**：`compaction/summary` 没有 `turn` 字段（手动压缩时 `compaction/start.turn` 甚至为 null），并进去等于把压缩的钱记到那轮头上。实现：幂等键 `sessionId#compact-<compactionId>`，`prompt = input + cacheRead`，note 带 `compaction=1`；`usage` 缺失 / 零 token / 无 `compactionId` 一律不记 | `usage ⑩–⑩e` 钉着；2026-11-17 真账本实收（`prompt=48000` = input 8000 + cacheRead 40000） |
 | 11 | 可选服务用 `ctx.get('x')` 读，**绝不能写进 inject**（老宿主没那服务 → 插件永不 apply） | whale 注释 |
 | 12 | `dsh plugin` 只是 pnpm 的转发壳；装/更新都靠版本号 | `dsh plugin --help` 原话 |
 | 13 | 更新器按 `package.json.repository` 找上游 Release / Tag | `dsh-plugin-updates` README |
@@ -91,8 +91,12 @@
 **用量上报**：`session/event` → `UsageLedger.onSessionEvent`（按 `(sessionId, turn)` 聚合
 `assistant/message`）→ `turn/end` 结算 → 本地 `outbox.jsonl` → 管道 MCP `usage_report` →
 已发键落 `sent.jsonl`。方寸没开就攒在 outbox，60 秒重试。会话销毁时补结算半轮。
+**压缩另记一笔**（事实 10g）：`compaction/summary` 自带 `usage`，键是 `sessionId#compact-<compactionId>`，
+`note` 带 `compaction=1` —— 它不是任何一轮的一部分，**不并进 turn**。
 结算时 `note` 会带**这一轮在办那张卡的卡号**（`card=<id>`，来自 `lib/cards.js`）——
 方寸账本可按卡归因 token。卡号放不进 120 字上限就整段不带，**绝不写半截 id**。
+⚠ **幂等要看两处**：`sent`（已发）**和 `queue`（本进程已入队未发）** —— 只看 `sent` 会让
+同一事件在一个 flush 周期内来两次就入队两遍（2026-11-17 `usage ⑩c` 抓到的旧 bug，轮次路径同样中招）。
 
 **待办挂件**：`apply()` 最前面订阅 `webserver/index-inject` → 推一行内联 script →
 浏览器加载 `/fangcun/widget.js` → 拉 `/fangcun/api/tasks` → 经同一根管道 `list_tasks`（10 秒缓存）。
@@ -188,6 +192,8 @@ electron-updater 目录 / 开始菜单与桌面快捷方式 / Program Files 与 
 | **对象形状取真 id，不同会话同一轮不互相顶掉** | `usage ⑥/⑥b`、`plugin ⑦` |
 | 子代理照报但标 `subagent=1` | `usage ⑦` |
 | outbox 上限 500，丢最旧 + 报错 | `usage ⑧` |
+| **压缩用量独立记账**：口径 `prompt = input + cacheRead`、键 `#compact-<id>`、**不与轮次重复**、脏数据不记、能带卡号 | `usage ⑩–⑩e` |
+| **幂等看两处**（已发 `sent` + 已入队 `queue`）：同一事件在一个 flush 周期内来两次也只记一次 | `usage ⑩c`（这条抓到过轮次路径的旧 bug） |
 | 挂件脚本能跑（真执行，不只是字符串匹配） | `widget-dom ①–⑧` |
 | **挂件只当浮层**：样式表真挂进 `<head>`、根节点按角写内联定位、折叠态内联 `display:none` | `widget-dom ⑨` |
 | 位置默认右上（右下是鲸鱼的）、四角可换、选择存 `localStorage`、脏值回默认 | `widget-dom ⑩` |
@@ -327,7 +333,9 @@ runner 是 **`windows-latest` + Git Bash**：插件只支持 Windows，`detect` 
 
 ## 8. 还没解决的
 
-1. `compaction/summary.usage` 该不该接（事实 10g）—— 缺一次真机压缩的对照。
+1. ~~`compaction/summary.usage` 该不该接（事实 10g）~~ → ✅ **2026-11-17 已接**（用户拍板"也算损耗"）。
+   为什么不会重复记账已静态查明（压缩走 `ctx.llm.stream`，不经 agent loop，所以不产生 `assistant/message`），
+   实现与测试见事实 10g、`usage ⑩–⑩e`。真账本实收一条 `prompt=48000`。
 2. 方寸月报界面还没人工确认过（文件层已确认 `origin=external`、`reported_by=dsh`）。
 3. 会话压缩/恢复期之外的 turn 语义没再验过（现存结论：不回绕，见事实 10e）。
 4. **0.3.0 的三件事只在单测里绿过**（规则段 / 一行现状 / 自证），真机要重启后按
