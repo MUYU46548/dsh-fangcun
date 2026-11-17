@@ -79,6 +79,7 @@
 | 40 | ⚠ **`agents.create` 的三个坑**：① **没有 `title` 字段**（`CreateAgentOptions` 只有 `sessionId/meta/agentOptions/setup/signal` 等，传了静默丢弃）；② **不传 `meta.cwd` 就落在 `sessions/_no-cwd/`**（真机实证），等于派进真空；③ **不传 `agentOptions` 就没有 provider/model**，第一轮抛 `agent "…" has no provider/model` —— 用户看到的是"会话开出来了，但说话不回"。正解：`cwd` 用绝对路径 + `agentOptions` 取 `agentDefaultModel.currentSelection()`（与 GUI 新建会话同源） | 2026-11-17 真机：探针会话落在 `_no-cwd` 且零事件；`agent-loop:686` 原文 |
 | 41 | **会话要"落盘"得自己 `sessions.flush(session)`**：`session.append`/`followup` 只进内存，落盘是 `session/flush` 的活（`dsh-schedule` 每发一条都 await 一次）。探针会话在磁盘上只有一行头、零事件就是这个原因 | `plugin ⑩`、`dsh-schedule` `send()` 原文 |
 | 42 | ✅ **改完不必重启 DSH**：本机 `dsh-hmr` 是 active，**Plugin Manager 的一次操作会触发重组**，而重组"也替换**加载文件在磁盘上变过的插件**——包含 `node_modules` 下装的和 **`link:` 包的目标**"。所以 `plugin_manager set_plugin(enabled:true)` 一次（`target=include:dsh-fangcun`）就能让 0.6.4→0.6.5 在**运行中的进程里**生效（`health.plugin.version` 当场变 0.6.5，`compat.checkedAt` 刷新）。⚠ 前提是新代码**能被干净 import**（先 `node -e "import('./lib/index.js')"` 验一遍）：加载失败会把旧实例停掉并标 `failed`，那才是真的坏 | `dsh-hmr` README 第 50 行原文 + 2026-11-17 18:58 实测 |
+| 43 | ⚠ **`待验收` = 验收项全部验过，不是"差不多了"**（用户 2026-11-17 原话："没做完的东西就不该这样放，我除了签完成只有驳回"）。用户那一栏只有「完成 / 驳回」两个按钮，**没有"再等等"** —— 所以送一张自己心里知道还差东西的卡进去，等于逼他在两个都不对的选项里选。判据：卡上只要还留着「待复核 / 待真机 / 待重启 / TODO / 之一未验」这类字样，**就不许 move 到 `待验收`**；该留在 `进行中`，或拆小卡单独追。这是 agent 的错，不是用户的负担 | `prompt ①d` 钉着；2026-11-17 我把「派单管子」那张标着"待重启复核"的卡送审，用户当场指出 |
 
 ## 3. 四条链路（改之前先看懂数据怎么走）
 
