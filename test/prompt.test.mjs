@@ -23,6 +23,27 @@ import {
 
 const tmpHome = () => fs.mkdtempSync(path.join(os.tmpdir(), 'fc-prompt-'))
 
+test('①b 规则段必须同时给出两条路径（MCP 掉线时不能变成死指令）', () => {
+  // 2026-11-17：原来只写 `mcp__fangcun__*`。那批属于方寸 MCP 客户端，
+  // 掉线时工具表里根本没有这些名字 → 模型照着调会报"没有这个工具"。
+  // 所以规则段要同时给出插件工具名，并说明优先用哪个。
+  assert.match(RULES_TEXT, /fangcun_tasks/, '要给出插件工具名')
+  assert.match(RULES_TEXT, /fangcun_card/)
+  assert.match(RULES_TEXT, /fangcun_write/)
+  assert.match(RULES_TEXT, /mcp__fangcun__list_tasks/, 'MCP 那套也要留着（连上时它更直接）')
+  assert.match(RULES_TEXT, /不依赖 MCP 客户端/, '要说清插件工具为什么不依赖 MCP')
+  assert.match(RULES_TEXT, /优先插件工具/, '两个都有时要给明确优先级，别让模型自己猜')
+})
+
+test('①c 规则段钉住「只到待验收」—— 两道锁的第一道（第二道在方寸本体）', () => {
+  // 梅林 2026-11-17："DSH 也得过闸……智能层不豁免治理层"。
+  // 真正的硬拒在方寸 `mcp/tools.ts` 的 move_status（完成/驳回直接报错），
+  // 但模型不该先撞墙才知道 —— 规则段要提前说清。
+  assert.match(RULES_TEXT, /待验收/, '要写明只到待验收')
+  assert.match(RULES_TEXT, /完成.*驳回.*签字|签字/, '要说清完成/驳回是用户的签字')
+  assert.match(RULES_TEXT, /拒绝|硬拒/, '要说明方寸会拒绝，别让模型去试')
+})
+
 test('① 规则段钉住四个触发点（⑦开工先查 / ⑧收工回写 / ⑨新问题建卡 / ⑩不过度触发）', () => {
   assert.match(RULES_TEXT, /开工先查/)
   assert.match(RULES_TEXT, /收工回写/)

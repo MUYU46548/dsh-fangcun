@@ -46,6 +46,21 @@ test('① 只从白名单工具取 id：日志 id、检索词、正文一律不�
   assert.ok(CARD_ID_TOOLS.has('get_task'))
 })
 
+test('①b 插件自己的工具也要能取卡号（0.4.0 的坑，2026-11-17）', () => {
+  // 病：加了 fangcun_card / fangcun_write，但 CARD_ID_TOOLS 只列 MCP 短名，
+  // 于是模型明明动了卡，proof 与 cards 全都不认 —— 挂件「本次在办」永远是空的。
+  assert.equal(cardIdFromCall('fangcun_card', { id: 'card-x' }), 'card-x')
+  assert.equal(cardIdFromCall('fangcun_write', { action: 'move', id: 'card-y', status: '待验收' }), 'card-y')
+  assert.equal(cardIdFromCall('fangcun_write', { action: 'update', id: 'card-z', title: 'T' }), 'card-z')
+
+  // create 没有 id —— 新建卡不是"在办某张卡"，必须取不到（否则会造一个空卡号）
+  assert.equal(cardIdFromCall('fangcun_write', { action: 'create', title: 'T' }), '')
+  // 列卡不算在办某张卡
+  assert.equal(cardIdFromCall('fangcun_tasks', { id: 'card-w' }), '')
+  // 两条路径都要真能取到（同一个能力两种叫法）
+  assert.equal(cardIdFromCall(FANGCUN_TOOL_PREFIX + 'update_task', { id: 'card-m' }), 'card-m')
+})
+
 test('② 一轮里动过的卡按出现顺序去重；焦点有 TTL；会话销毁就忘掉', () => {
   let now = 1_000_000
   const cards = new CardTracker({ now: () => now, ttlMs: 60_000 })
@@ -128,6 +143,60 @@ test('③ 逐轮度量：先查后改 / 改了没回写 / 只查不干，各自�
   // 重启（新建实例）：数字从 turns.jsonl 读回来，不归零
   const again = new ToolProof({ home })
   assert.deepEqual(again.state().turns, stats, '跨重启累计 —— 不然"这几天有没有联动"证明不了')
+  fs.rmSync(home, { recursive: true, force: true })
+})
+
+test('③d 插件工具也算联动（0.4.0）：fangcun_tasks 算查、fangcun_write 算回写', () => {
+  // 病（2026-11-17 自己挖的）：0.4.0 让模型可以不走 MCP 客户端，
+  // 但 proof 只认 mcp__fangcun__* → 用插件工具干的活**全都不计入**，
+  // 于是 proof.turns 看起来"退步"，而实际是口径没跟上。这条钉住两条路径都认。
+  const home = tmpHome()
+  const proof = new ToolProof({ home })
+  const s = session('session-dddd4444')
+  const call = (turn, name) => proof.record(s, { type: 'tool/call', data: { turn, name } })
+  const end = (turn) => proof.record(s, { type: 'turn/end', data: { turn } })
+
+  // 第 1 轮：插件工具走一遍完整顺序
+  call(1, 'fangcun_tasks')   // 查
+  call(1, 'read')
+  call(1, 'edit')
+  call(1, 'fangcun_write')   // 回写
+  const row = end(1)
+  assert.equal(row.first, 'fangcun_tasks', '第一次调用是方寸（插件工具）')
+  const v = verdictOf(row)
+  assert.equal(v.readBeforeEdit, true, '②7：fangcun_tasks 也要算"先查"')
+  assert.equal(v.wroteBack, true, '②8：fangcun_write 要算"回写"')
+
+  // 第 2 轮：只读插件工具 → 仍是"只查不干"
+  call(2, 'fangcun_card')
+  assert.equal(verdictOf(end(2)).readOnly, true, 'fangcun_card 算方寸读')
+
+  // 第 3 轮：混用两条路径也得数得对（同一台机器上可能同时存在）
+  call(3, 'fangcun_tasks')
+  call(3, 'edit')
+  call(3, FANGCUN_TOOL_PREFIX + 'move_status')
+  const v3 = verdictOf(end(3))
+  assert.equal(v3.readBeforeEdit, true)
+  assert.equal(v3.wroteBack, true)
+
+  const stats = summarize([row, ...[]])
+  assert.equal(stats.turns, 1)
+  fs.rmSync(home, { recursive: true, force: true })
+})
+
+test('③e 只读插件工具不能算成回写（否则"只查不干"会被误报）', () => {
+  // fangcun_tasks / fangcun_card 是只读：算进 CARD_WRITE_TOOLS 会把
+  // "只查不干"的可疑轮次（②10）判成正常回写 —— 那是把病掩盖掉。
+  const home = tmpHome()
+  const proof = new ToolProof({ home })
+  const s = session('session-eeee5555')
+  const call = (turn, name) => proof.record(s, { type: 'tool/call', data: { turn, name } })
+  call(1, 'fangcun_tasks')
+  call(1, 'fangcun_card')
+  const row = proof.record(s, { type: 'turn/end', data: { turn: 1 } })
+  const v = verdictOf(row)
+  assert.equal(v.wroteBack, false, '只读工具绝不能算回写')
+  assert.equal(v.readOnly, true, '两把都是读 → 只查不干')
   fs.rmSync(home, { recursive: true, force: true })
 })
 

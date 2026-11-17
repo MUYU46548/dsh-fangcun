@@ -121,6 +121,27 @@ dsh plugin --profile desktop add https://github.com/MUYU46548/dsh-fangcun/releas
 `健康检查` 的 `tools` 一格会告诉你注册上没有：`registered` 为 `true` 才算真装上。
 移到「待验收」就停手，等你自己签 `完成` —— 插件不会替你把卡关掉。
 
+### DSH 升级了怎么办：它只提醒，不会自己消失
+
+DSH 还在 developer preview，**升级很频繁**。这里有一个容易踩的坑：
+如果插件在 `package.json` 里写了"只支持 0.2.x"，那么 DSH 一升到 0.3，
+**宿主会把这个插件整个跳过**——挂件、记账、工具全没了，界面上只显示"没装"，
+而且**不会告诉你原因**。
+
+所以现在 `engines.dsh` **只写下限、不写上界**：DSH 升级后插件照常加载，
+能用的部分继续用。同时插件每次启动会体检六项宿主能力，结论写在 `health.compat`：
+
+```json
+"compat": {
+  "capabilities": { "webServer": "ok", "tools": "ok", ... },
+  "warnings": [],
+  "summary": "全部 6 项宿主能力正常"
+}
+```
+
+哪一项变了（`degraded`）或没了（`missing`），`warnings` 会用一句话说清哪块受影响。
+**这是"只提醒"**：插件不退出、不罢工，你能用的东西一样不少，只是知道哪块要修。
+
 ### 它自己记账：agent 到底调没调方寸
 
 `$DSH_HOME/dsh-fangcun/tools.jsonl` 里记着方寸工具被调用的时间、会话、轮次与名字

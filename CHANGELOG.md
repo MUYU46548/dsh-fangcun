@@ -1,5 +1,85 @@
 # 变更记录
 
+## 0.4.1（2026-11-17）
+
+这一版四件事：**取消 DSH 版本上界**、**宿主兼容性只提醒不退出**、**修 0.4.0 的自证失明**、
+**防腐层边界上测试 + 验收闸加锁**。
+
+### 取消 `engines.dsh` 上界（用户拍板："能不能用随缘，插件永远只保适配版本"）
+
+原来是 `>=0.2.1-rc.2 <0.3.0`。核实宿主代码（`@deepseek-ai/dsh-app-boot` 的 `loadProfileDirectory`）：
+
+```js
+const issue = evaluatePluginCompatibility(bundleManifest, exemptions);
+if (issue !== void 0 && !issue.exempted) throw new Error(pluginCompatibilityWarning(issue));
+// ...
+} catch (error) { skippedBundles.push({ packageName, reason: String(error) }); }
+```
+
+**不满足 `engines` 会被 throw，然后 catch 成 `skippedBundles` —— 整个插件静默消失**：
+挂件、记账、工具全没了，界面上只显示"没装"，而且没有原因。
+DSH 是 developer preview、升级频繁，于是 `<0.3.0` 就是一个定时炸弹。
+
+现在只有下限 `>=0.2.1-rc.2`：**宁可能用 + 提醒，也不要静默退出**。
+
+### 宿主兼容性自检（`lib/compat.js`）—— 只提醒，不退出
+
+六个关键宿主能力各给三态：`ok` / `degraded`（存在但形状不像预期）/ `missing`。
+结论进 `health.compat`：
+
+```json
+"compat": {
+  "checkedAt": "2026-11-17T...",
+  "capabilities": { "webServer": "ok", "systemPrompt": "ok", "tools": "ok", ... },
+  "warnings": [],
+  "summary": "全部 6 项宿主能力正常"
+}
+```
+
+判据是**运行时真实形状**，不是版本号比较 —— 版本号相等不代表 API 没变（preview 期尤其）。
+探测**绝不抛**：出错记成缺口并继续，插件照常干它能干的。
+
+⚠ 一个真 bug（测试 ⑤ 抓出来的）：最初只判 `typeof root.on === 'function'`，于是"宿主有 `on` 但一订阅就抛"
+被当成健康 —— 记账与自证实际全哑却报绿。现在**真调一次**再判。
+
+### 修 0.4.0 引入的自证失明（我自己挖的坑）
+
+`proof.js` / `cards.js` 只认 `mcp__fangcun__*`（DSH 给 MCP 工具生成的名字）。
+0.4.0 新增的 `fangcun_tasks` / `fangcun_card` / `fangcun_write` **不带这个前缀**，于是：
+
+- `proof.rows` 不涨、`readBeforeEdit` / `wroteBack` 不涨
+- `cards.lastCardId` 永远空 → 挂件「本次在办」消失、`usage` 的 note 不带 `card=`
+
+等于把"接线坏了"的病（卡 140864fa）搬成"口径没跟上"。现在**两个前缀都认**，
+并区分只读/写入：`fangcun_tasks` / `fangcun_card` 算查，`fangcun_write` 算回写
+（只读工具算回写会把"只查不干"的病掩盖掉）。
+
+### 验收闸加锁（两道）
+
+用户/梅林的硬规则："DSH 也得过闸……智能层不豁免治理层。"
+
+- **第二道（原本就有，在方寸本体）**：`desktop/src/main/mcp/tools.ts` 的 `move_status` 对
+  `完成` / `驳回` 直接 `isError` 拒绝。**这道锁位置正确** —— 在方寸核心层，不在插件、不在 DSH。
+- **第一道（新增，在插件）**：`SIGNOFF_STATUSES`。理由不是"不信任方寸"，而是：
+  不该先撞墙才知道；且不许赌锁的位置（方寸哪天重构挪走了硬拒，插件这道还在）。
+  `move` 与 `update` 两条路径都过闸，不留后门。
+
+### 防腐层边界上测试（`test/layering.test.mjs`）
+
+用户拍板："方寸↔DSH 之间收窄成一个适配模块，翻译只发生在这一处。"
+核实结果：**已经基本是这样了**——所有 `root.get/inject/on/effect`、`webServer.register`、
+`systemPrompt`、`tools.register` 全部集中在 `lib/index.js` 一个文件。
+
+所以这版不重写，只**把它变成 CI 能守的规则**：除 `index.js` / `compat.js` 外，
+任何 lib 文件出现 DSH 概念就红。做了反例验证（故意在 `cards.js` 塞 `root.get('webServer')`
+→ 2 例失败），确认检测器真的有效，不是空跑。
+
+### 规则段改写（`lib/prompt.js`）
+
+原来只写 `mcp__fangcun__*` —— MCP 掉线时那些名字**在工具表里不存在**，这段变成死指令。
+现在两条路径都写，并明确"两个都有时优先插件工具"。另加一条纪律：
+**只到「待验收」，完成/驳回是用户签字，方寸会拒绝**。
+
 ## 0.4.0（2026-11-17）
 
 **插件第一次真的让模型能调方寸做事。** 0.3.0 的全部对外出口是 4 条 HTTP 路由 ——

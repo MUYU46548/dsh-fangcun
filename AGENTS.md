@@ -61,6 +61,13 @@
 | 23 | **`defineTool` 不改变对象**：它只做类型标注 + 校验，返回的就是传入的那个对象。所以**零依赖插件可以不 import `@deepseek-ai/dsh-tools`**，直接把裸对象交给 `register` —— 形状对齐 contracts.ts 即可 | `dsh-tool-todo/src/index.ts` 用 `ctx.tools.register(defineTool({…}))`，`defineTool` 无包装逻辑 |
 | 24 | **`output.schema` 的 required 字段必须每个分支都填满**：少一个字段，宿主在 output 校验那步会拒掉**整次**调用 —— "没连上后端"会以"工具坏了"的样子出现 | `ToolOutputDefinition`：`schema` 是 `JsonSchemaNode`，`render` 是其纯投影；`tool.test.mjs ③b③c` 钉着 |
 | 25 | 本机 `HKCU\Console\%%Startup` **键存在但零值** → Windows 11 默认把控制台**委托给 Windows Terminal**。于是任何进程只要创建控制台，就会弹 `WindowsTerminal.exe -Embedding` 的可见窗口（`CASCADIA_HOSTING_WINDOW_CLASS`）。真正的 `PseudoConsoleWindow` 归属 cmd 自己、`rect=0x0` **不可见** —— 判断"谁闪的窗口"要看 `CASCADIA_*` 那一行 | 2026-11-17 实测：`MainWindowHandle` 对控制台窗口恒为 0（不可用作判据），必须枚举 `ConsoleWindowClass`/`PseudoConsoleWindow`/`CASCADIA_*` |
+| 26 | ⚠ **`engines.dsh` 写上界 = 给升级埋炸弹**：不满足时宿主会 `throw`，然后被 catch 成 `skippedBundles` —— **整个插件静默消失**（挂件/记账/工具全没，界面只显示"没装"，无原因）。⚠ 注意 `skippedBundles` 的注释写的是 "skipped without changing the manifest and listed in `skippedBundles`; nothing is printed" | `dsh-app-boot/lib/index.js` 的 `loadProfileDirectory`：`if (issue !== void 0 && !issue.exempted) throw new Error(pluginCompatibilityWarning(issue))` 在 `try` 里，`catch` 只 push 到 `skippedBundles` |
+| 27 | **所以 `engines.dsh` 只写下限、不写上界**（用户 2026-11-17："能不能用随缘，插件永远只保适配版本"）。代价是宿主 API 变了插件会"加载上但少干活"，所以**必须配运行期自检**（`lib/compat.js`）把缺口写进 `health.compat` | `compat ①` 钉住"不许有上界"；`compat ②–⑥` 钉住体检三态 |
+| 28 | **`root.on` 只判 `typeof === 'function'` 会漏掉"能调用但会抛"的宿主** —— 那与"没有"对插件是同一件事（订阅不上 = 收不到事件 = 记账与自证全哑），但报告要区分 missing/degraded | `compat ⑤⑤b`（2026-11-17 这个 bug 就是测试抓出来的） |
+| 29 | **`exempted` 机制**：宿主支持按"包名@精确版本 + DSH 精确版本"给豁免（`--accept-risk`），但那是给**用户**用的逃生口，不是插件该依赖的东西 | `dsh-app-boot` 的 `setProfileVersionExemption` / `validatePluginVersionExemption` |
+| 30 | **自证必须认两条命名路径**：`mcp__fangcun__<tool>`（DSH 生成的 MCP 工具名）与 `fangcun_<x>`（插件自己注册的）。只认前者会让 0.4.0 的插件工具**全部不被计入** —— `proof` 与 `cards` 双双失明。⚠ 两条路径的短名形状不同：MCP 那条要去前缀（`mcp__fangcun__update_task`→`update_task`），插件那条**不能去**（`fangcun_write` 去前缀会变成 `write`，撞上宿主的写文件工具） | `cards ①b`、`cards ③d③e`（2026-11-17 这个坑是自己挖的） |
+| 31 | **`完成` / `驳回` 的硬拒在方寸本体，不在插件**：`desktop/src/main/mcp/tools.ts` 的 `move_status` 直接回 `isError` + `suggested: '待验收'`。插件侧另有一道 `SIGNOFF_STATUSES`（第一道锁），理由是"不该先撞墙才知道"+"不许赌锁的位置" | `tool ③b③c`、方寸 `tools.ts:1203` |
+| 32 | **防腐层现状**：所有 DSH 概念（`root.get/inject/on/effect`、`webServer.register`、`systemPrompt`、`tools.register`）**已集中在 `lib/index.js`**；`mcp-pipe/usage/cards/proof/tool/status/widget` 全是方寸协议侧（换宿主不用动）。用 `test/layering.test.mjs` 把它钉成 CI 规则，不靠纪律 | `layering ①–⑤`（做过反例验证：往 `cards.js` 塞 `root.get('webServer')` → 2 例失败） |
 
 ## 3. 四条链路（改之前先看懂数据怎么走）
 
@@ -115,8 +122,9 @@ electron-updater 目录 / 开始菜单与桌面快捷方式 / Program Files 与 
 输出一律**有界**（列表 30 条、正文 4000 字）并在超限时明说 —— 上下文是共用资源。
 注册状态进 `health.tools = { registered, names, error }`。
 
-**自证**：同一条 `session/event` 订阅里，`tool/call` 且名字以 `mcp__fangcun__` 开头 →
-追加 `$DSH_HOME/dsh-fangcun/tools.jsonl`（只记时间/会话/轮次/工具名，不记参数；上限 500）。
+**自证**：同一条 `session/event` 订阅里，`tool/call` 且名字**以 `mcp__fangcun__` 或 `fangcun_` 开头**
+（两条路径都认，见事实 30）→ 追加 `$DSH_HOME/dsh-fangcun/tools.jsonl`
+（只记时间/会话/轮次/工具名，不记参数；上限 500）。
 另外 **每轮收尾一行** 进 `turns.jsonl`（上限 500），记的是**顺序**：第一次工具是谁、方寸读在第几位、
 改文件在第几位、回写在第几位、shell 在第几位。`health.proof.turns` 直接给出
 `turns / withEdit / readBeforeEdit / wroteBack / readOnly / withShell` ——
@@ -170,13 +178,19 @@ electron-updater 目录 / 开始菜单与桌面快捷方式 / Program Files 与 
 | apply 真的注册了提示词；没有 `systemPrompt` 服务时不假装成功、其它功能照旧；方寸工具调用落 `tools.jsonl` | `plugin ⑧⑨` |
 | **模型工具是真 ToolDefinition**（name/description/parameters/output/execute 齐全）；**只白名单转发**（不在 `create/update/move` 里的 action 就抛）；参数不全就抛不猜；输出有界且截断明说；方寸没开时读回空、写回 `ok:false` 不谎报 | `tool ①②③④⑤` |
 | 没有 `tools` 服务时 `health.tools.registered=false` + 写明原因，不假装注册 | `plugin ⑨` |
+| **engines.dsh 不设上界**（写上界会让升级后插件静默消失）；`dsh.compatibility.dsh` 同样只有下限 | `compat ①` |
+| **兼容性只提醒不退出**：六项宿主能力三态齐全；空宿主/抛异常的探测都不外泄；`on` 能调用但会抛要报 degraded 而不是 ok | `compat ②–⑥` |
+| **自证认两条命名路径**：MCP 短名与插件工具名都计入；`fangcun_tasks`/`fangcun_card` 只算查、`fangcun_write` 算回写；只读工具不许算回写 | `cards ①b`、`cards ③d③e` |
+| **验收闸第一道锁**：`完成`/`驳回` 在 move 与 update 两条路径上都被拒；正常状态（待办/进行中/待验收/待审批）不误伤 | `tool ③b③c` |
+| **规则段两条路径都写**（MCP 掉线时不变成死指令）+ 钉住「只到待验收」 | `prompt ①b①c` |
+| **防腐层边界**：DSH 概念只在 `index.js` / `compat.js`；业务模块零 DSH 依赖；零 dependencies | `layering ①–⑤`（做过反例验证） |
 | **看板链接只指向活着的进程**：`.tegula-port` 有 PID 且 PID 已退出 → 不给链接；旧格式只有端口 → 保留旧行为 | `plugin ⑩` |
 | health 只报能自证的事实、不泄凭据 | `plugin ⑤` |
 
 ## 5. 本地怎么跑
 
 ```powershell
-npm test        # 79 条，不需要 DSH、不需要真方寸（真起假管道）
+npm test        # 98 条，不需要 DSH、不需要真方寸（真起假管道）
 npm pack        # 验发布包；CI 会把 tgz 解出来真 apply 一次
 ```
 
@@ -262,9 +276,17 @@ runner 是 **`windows-latest` + Git Bash**：插件只支持 Windows，`detect` 
 
 ## 7. 维护检查表
 
-**每次 DSH 升级（minor）**：`npm test` → 装一次跑一轮看 health / sent / 挂件 →
-更新 `package.json` 的 `engines.dsh` 与 `dsh.compatibility.dshReleases` →
-失败就 +1 patch 发版，**不要**跳过版本号。
+**每次 DSH 升级**（用户 2026-11-17 拍板："能不能用随缘，插件永远只保适配版本"）：
+
+1. **先看 `health.compat`**——它直接告诉你哪块 API 变了：
+   `capabilities` 里哪项不是 `ok`，`warnings` 就是人话解释。
+   这一步不需要重启插件（体检在 apply 时跑，重启后自动重算）。
+2. `npm test` —— 单测不依赖宿主版本，主要防自己改坏。
+3. 真机跑一轮，看 `health` 的 `usage` / `widget` / `prompt` / `tools` / `proof` 五栏。
+4. **有缺口才修**，修完 +1 patch 发版。
+5. ⚠ **不要为了"跟版本"去改 `engines.dsh` 的上界** —— 那会让升级后插件静默消失（事实 26）。
+   `engines.dsh` 只有下限；`dsh.compatibility.dshReleases` 里可以加一行
+   `"<新版本>": "verified"` 记录"我在这版验过"，但**它不参与加载判定**，纯记录。
 
 **方寸契约变更**：`CONTRACT_VERSION` +1，改 payload 映射，补契约测试；不要靠"应该兼容"。
 

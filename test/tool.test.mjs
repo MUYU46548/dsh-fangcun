@@ -12,7 +12,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   buildTools, makePipeCallTool, shapeTasks, shapeCard, writeCallOf,
-  TOOL_ROUTES, WRITE_ACTIONS,
+  TOOL_ROUTES, WRITE_ACTIONS, SIGNOFF_STATUSES,
 } from '../lib/tool.js'
 
 /** 假管道：按工具名回预设结果，并记录调用 */
@@ -108,7 +108,40 @@ test('③ writeCallOf：参数不全就抛，绝不猜；只放模型真给了�
   })
 })
 
-test('③b 输出有界：list_tasks 封顶 30 条，且 truncation 说出来', () => {
+test('③b 闸门：完成 / 驳回 是用户签字，agent 不许设（第一道锁）', () => {
+  // 第二道锁在方寸本体（desktop/src/main/mcp/tools.ts 的 move_status，会 isError）。
+  // 这道在插件侧先挡，理由：不该先撞墙才知道、且不许赌锁的位置。
+  // 用户 2026-11-17 硬规则："DSH 也得过闸……智能层不豁免治理层。"
+  assert.deepEqual([...SIGNOFF_STATUSES].sort(), ['完成', '驳回'])
+
+  // move 到这两个状态：抛，且提示要能指导模型下一步
+  for (const bad of ['完成', '驳回']) {
+    assert.throws(
+      () => writeCallOf({ action: 'move', id: 'c1', status: bad }),
+      /签字|待验收/,
+      `move 到「${bad}」必须被拒`,
+    )
+  }
+  // 待验收照常放行（那是 agent 该做的最后一格）
+  assert.deepEqual(writeCallOf({ action: 'move', id: 'c1', status: '待验收' }), {
+    tool: 'move_status', args: { id: 'c1', status: '待验收' },
+  })
+
+  // update 也能带 status —— 同一个词必须同样被拒（否则绕路就破了）
+  assert.throws(
+    () => writeCallOf({ action: 'update', id: 'c1', status: '完成' }),
+    /签字/,
+    'update 带 status 也要过闸，不能留后门',
+  )
+})
+
+test('③c 闸门不能误伤正常状态', () => {
+  for (const ok of ['待办', '进行中', '待验收', '待审批']) {
+    assert.doesNotThrow(() => writeCallOf({ action: 'move', id: 'c1', status: ok }))
+  }
+})
+
+test('③d 输出有界：list_tasks 封顶 30 条，且 truncation 说出来', () => {
   const many = Array.from({ length: 45 }, (_, i) => ({
     id: 'c' + i, title: 't' + i, status: '进行中', body: '很长的正文'.repeat(100),
   }))
