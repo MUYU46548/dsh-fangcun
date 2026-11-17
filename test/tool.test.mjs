@@ -11,8 +11,9 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  buildTools, makePipeCallTool, shapeTasks, shapeCard, writeCallOf,
-  TOOL_ROUTES, WRITE_ACTIONS, SIGNOFF_STATUSES,
+  buildTools, makePipeCallTool, shapeTasks, shapeCard, shapeLogs, shapeLog, shapeSearch,
+  writeCallOf, logWriteCallOf, TOOL_ROUTES, WRITE_ACTIONS, SIGNOFF_STATUSES, NEVER_ROUTED,
+  LOG_WRITE_ACTIONS, LOG_RUNNING_STATES,
 } from '../lib/tool.js'
 
 /** 假管道：按工具名回预设结果，并记录调用 */
@@ -37,9 +38,12 @@ const byName = (tools) => Object.fromEntries(tools.map((t) => [t.name, t]))
 test('① 造出三个真工具，定义字段齐全', () => {
   const { deps } = fakeDeps()
   const tools = buildTools(deps)
-  assert.equal(tools.length, 4)
+  assert.equal(tools.length, 8)
   const t = byName(tools)
-  assert.deepEqual(Object.keys(t).sort(), ['fangcun_card', 'fangcun_context', 'fangcun_tasks', 'fangcun_write'])
+  assert.deepEqual(Object.keys(t).sort(), [
+    'fangcun_card', 'fangcun_context', 'fangcun_log', 'fangcun_log_write',
+    'fangcun_logs', 'fangcun_search', 'fangcun_tasks', 'fangcun_write',
+  ])
 
   for (const def of tools) {
     // contracts.ts：ToolDefinition extends ToolSchema，且 output 是**必须**的
@@ -55,14 +59,22 @@ test('① 造出三个真工具，定义字段齐全', () => {
   for (const def of tools) assert.ok(!def.name.startsWith('mcp__'), def.name + ' 不该占 MCP 命名空间')
 })
 
-test('② 只白名单转发：读只碰 list_tasks / get_task，写只碰三个写工具', async () => {
+test('② 只白名单转发：读只碰 list_tasks / get_task / list_logs / get_log，写只碰写工具', async () => {
   // TOOL_ROUTES 只能指向读工具或 null（null = 按 action 分发）
   assert.equal(TOOL_ROUTES.fangcun_tasks, 'list_tasks')
   assert.equal(TOOL_ROUTES.fangcun_card, 'get_task')
+  assert.equal(TOOL_ROUTES.fangcun_search, 'search_tasks')
+  assert.equal(TOOL_ROUTES.fangcun_logs, 'list_logs')
+  assert.equal(TOOL_ROUTES.fangcun_log, 'get_log')
   assert.equal(TOOL_ROUTES.fangcun_write, null)
+  assert.equal(TOOL_ROUTES.fangcun_log_write, null)
   assert.deepEqual(Object.keys(WRITE_ACTIONS).sort(), ['create', 'move', 'update'])
+  assert.deepEqual(Object.keys(LOG_WRITE_ACTIONS).sort(), ['create', 'status', 'update'])
 
-  const { calls, deps } = fakeDeps({ list_tasks: [], get_task: { id: 'c1', title: 't' } })
+  const { calls, deps } = fakeDeps({
+    list_tasks: [], get_task: { id: 'c1', title: 't' }, list_logs: [], get_log: { id: 'l1', title: 't' },
+    search_tasks: [],
+  })
   const t = byName(buildTools(deps))
 
   await t.fangcun_tasks.execute({ view: 'active' })
@@ -71,9 +83,21 @@ test('② 只白名单转发：读只碰 list_tasks / get_task，写只碰三个
   await t.fangcun_card.execute({ id: 'c1' })
   assert.equal(calls[1].name, 'get_task')
 
+  await t.fangcun_search.execute({ query: '派单' })
+  assert.equal(calls[2].name, 'search_tasks')
+  assert.equal(calls[2].args.query, '派单')
+
+  await t.fangcun_logs.execute({ project: 'dsh-fangcun' })
+  assert.equal(calls[3].name, 'list_logs')
+
+  await t.fangcun_log.execute({ id: 'l1' })
+  assert.equal(calls[4].name, 'get_log')
+
   // 不允许调用任意工具名（提权）：action 不在白名单就是抛
   await assert.rejects(() => t.fangcun_write.execute({ action: 'delete_task', id: 'c1' }))
   await assert.rejects(() => t.fangcun_write.execute({ action: 'get_data_dir' }))
+  await assert.rejects(() => t.fangcun_log_write.execute({ action: 'delete_task', id: 'l1' }))
+  await assert.rejects(() => t.fangcun_log_write.execute({ action: 'inject_logs', id: 'l1' }))
 })
 
 test('③ writeCallOf：参数不全就抛，绝不猜；只放模型真给了的字段', () => {
@@ -337,6 +361,173 @@ test('⑦c 缺 project 就抛（不许默认成"全部项目"去猜）', async (
   const { deps } = fakeDeps()
   const t = byName(buildTools(deps))
   await assert.rejects(() => t.fangcun_context.execute({}), /project/)
+})
+
+// ── ⑧ 执行日志三件套（2026-11-17 补）──────────────────────────────────
+//
+// 为什么补这一组：P0 调查（tools.jsonl 500 行 + 会话原文）证明插件工具**有能力时模型就走插件**
+// （新会话 63 : 6），剩下的 MCP 流量几乎全是**能力缺口**。日志是缺口里最要命的一处，
+// 因为暮雨 2026-11-17 原话：「真正派活最常用的是从日志走」。缺了它，插件只能从
+// `fangcun_context` 看见最新一条日志，翻第二条就得回 MCP。
+
+test('⑧ fangcun_logs：有界、连不上不撒谎、截断说出来', async () => {
+  const rows = Array.from({ length: 40 }, (_, i) => ({
+    id: 'log_' + i, title: 'T' + i, status: '进行中', project: 'p', running: i === 0,
+    created: '2026-11-17T00:00:0' + (i % 10) + 'Z', continuesFrom: i === 1 ? 'log_0' : '',
+  }))
+  const v = shapeLogs(rows, { project: 'p' }, true)
+  assert.equal(v.connected, true)
+  assert.equal(v.total, 40)
+  assert.equal(v.returned, 20, '列表封顶 20 条')
+  assert.equal(v.truncated, true, '截断必须说出来')
+  assert.equal(v.items[0].running, true)
+  assert.equal(v.items[1].continuesFrom, 'log_0', '接力链上游要带上（派活靠它知道上一棒是谁）')
+
+  // 连不上：**不许回 0 条冒充"没有日志"**（与 list_tasks 同一条纪律）
+  const off = shapeLogs([], {}, false)
+  assert.equal(off.connected, false)
+  assert.match(off.hint, /没在运行|下载/)
+})
+
+test('⑧b fangcun_log：正文封顶；**日志号不存在时不许回 ok:true 装成空日志**', () => {
+  const long = 'Y'.repeat(10_000)
+  const v = shapeLog({ id: 'l1', title: 'T', content: long, chain: { upstream: [{ id: 'u', title: 'U' }], downstream: [] } })
+  assert.equal(v.ok, true)
+  assert.equal(v.body.length, 4000)
+  assert.equal(v.bodyTruncated, true)
+  assert.equal(v.bodyLength, 10_000)
+  assert.equal(v.upstream.length, 1, '接力链上游要带')
+  assert.equal(v.upstream[0].id, 'u')
+  assert.deepEqual(v.downstream, [])
+
+  // ⚠ 2026-11-17 真管道探针抓到的真 bug：方寸对不存在的日志号回
+  //   `{ok:false,error:'Log not found: …'}` + isError，第一版把它当正常日志 →
+  //   模型看到 ok:true 和一片空白。读失败伪装成"这条日志是空的"是最坏的错。
+  const bad = shapeLog({ ok: false, error: 'Log not found: log_nope' })
+  assert.equal(bad.ok, false, '读失败必须是 ok:false')
+  assert.match(bad.body, /Log not found/, '原因要带给模型，别让它以为日志是空的')
+  assert.equal(bad.bodyLength, 0)
+
+  // 每个分支都要填满 required（少一个字段宿主会拒掉整次调用）
+  for (const k of ['ok', 'id', 'title', 'status', 'project', 'created', 'completed', 'running',
+    'agentName', 'body', 'nextSteps', 'continuesFrom', 'attachmentCount', 'attachmentsHint',
+    'upstream', 'downstream', 'bodyTruncated', 'bodyLength']) {
+    assert.ok(k in bad, 'shapeLog 漏了 ' + k)
+  }
+})
+
+test('⑧c 日志写口三道硬约束（都来自方寸原文，不是我自己加的）', () => {
+  // ① create 必须 userAsked=true —— 日志是用户的私人笔记本，不是 agent 汇报的垃圾桶
+  assert.throws(() => logWriteCallOf({ action: 'create', title: 'x' }), /userAsked/)
+  assert.throws(() => logWriteCallOf({ action: 'create', title: 'x', userAsked: false }), /userAsked/)
+  assert.throws(() => logWriteCallOf({ action: 'create', userAsked: true }), /title/)
+  assert.deepEqual(
+    logWriteCallOf({ action: 'create', title: 'T', userAsked: true, project: 'p', content: 'c', nextSteps: 'n' }),
+    { tool: 'create_log', args: { title: 'T', userAsked: true, project: 'p', content: 'c', nextSteps: 'n' } },
+  )
+  // userAsked 不许被插件"顺手补上" —— 补了就等于替用户同意
+  assert.equal(logWriteCallOf({ action: 'create', title: 'T', userAsked: true }).args.userAsked, true)
+
+  // ② 日志没有终态：status 只有 running / idle，`完成`/`驳回` 在这里不存在
+  assert.deepEqual(LOG_RUNNING_STATES.slice().sort(), ['idle', 'running'])
+  for (const bad of ['完成', '驳回', '待验收', '进行中', '']) {
+    assert.throws(() => logWriteCallOf({ action: 'status', id: 'l', state: bad }), /running 或 idle/)
+  }
+
+  // ③ update 改不了 status（方寸原文："Lifecycle fields (status) are NOT here"）
+  const up = logWriteCallOf({ action: 'update', id: 'l', title: 'T', status: '完成' })
+  assert.equal(up.tool, 'update_log')
+  assert.equal('status' in up.args.fields, false, 'update 不许夹带 status')
+
+  // taskIds 空数组是**合法的清空**，不能当空串丢掉
+  assert.deepEqual(logWriteCallOf({ action: 'update', id: 'l', taskIds: [] }).args.fields, { taskIds: [] })
+  assert.throws(() => logWriteCallOf({ action: 'update', id: 'l' }), /至少/)
+  assert.throws(() => logWriteCallOf({ action: 'status', state: 'running' }), /id/)
+  assert.throws(() => logWriteCallOf({ action: 'move', id: 'l' }), /create \/ update \/ status/)
+})
+
+test('⑧d 连不上时日志写工具如实报失败（不假装写进去了）', async () => {
+  const t = byName(buildTools({ async callTool() { throw new Error('管道已断开') } }))
+  const w = await t.fangcun_log_write.execute({ action: 'status', id: 'l', state: 'running' })
+  assert.equal(w.ok, false)
+  assert.match(w.result, /管道已断开/)
+  assert.equal(w.tool, 'set_log_status')
+  assert.match(t.fangcun_log_write.output.render({}, w)[0].text, /失败/)
+
+  // 读日志连不上同理
+  const r = await t.fangcun_logs.execute({})
+  assert.equal(r.connected, false)
+  assert.match(t.fangcun_logs.output.render({}, r)[0].text, /不是"没有日志"/)
+})
+
+// ── ⑨ 关键词搜索（2026-11-17，用户：「search_tasks 必须补」）────────────
+
+test('⑨ fangcun_search：跨全部状态、有界、空查询必须拒', async () => {
+  // 口径必须与 fangcun_tasks 不同：搜索**含已完成/驳回**（否则永远搜不到"上次怎么解决的"）
+  const rows = [
+    { id: 'a', title: '派单管子', status: '待验收', project: 'dsh-fangcun' },
+    { id: 'b', title: '派单旧方案', status: '完成', project: 'fangcun-base' },
+    { id: 'c', title: '派单事故', status: '驳回', project: 'project-2' },
+  ]
+  const v = shapeSearch(rows, '派单', true)
+  assert.equal(v.connected, true)
+  assert.equal(v.query, '派单')
+  assert.equal(v.total, 3)
+  assert.equal(v.returned, 3)
+  assert.equal(v.truncated, false)
+  // 三种终态都要在结果里 —— 这是它区别于 list_tasks 的全部意义
+  // ⚠ 别对中文用 .sort()：它按码点排，不是拼音（第一版就写错了，测试红而不是代码红）
+  assert.deepEqual(new Set(v.items.map((x) => x.status)), new Set(['完成', '驳回', '待验收']))
+  assert.equal(v.items[0].project, 'dsh-fangcun', 'project 是数组时拍平')
+
+  // 有界：封顶 30，超了明说
+  const many = Array.from({ length: 40 }, (_, i) => ({ id: 'x' + i, title: 't', status: '待办', project: 'p' }))
+  const big = shapeSearch(many, 'x', true)
+  assert.equal(big.returned, 30)
+  assert.equal(big.truncated, true)
+
+  // 连不上：不许回"没有匹配"
+  const off = shapeSearch([], '派单', false)
+  assert.equal(off.connected, false)
+  assert.match(off.hint, /没在运行|下载/)
+
+  // ⚠ 空查询**必须拒**：2026-11-17 真管道实测 `search_tasks('')` 回 396 条 ——
+  //   放了它 = 让模型用空字符串把整张看板拉进上下文（"占满对话就死了"）
+  const t = byName(buildTools(fakeDeps({ search_tasks: rows }).deps))
+  for (const bad of ['', '   ', undefined, null]) {
+    await assert.rejects(() => t.fangcun_search.execute({ query: bad }), /query 不能为空/)
+  }
+  // 正常查询真转发
+  const { calls, deps } = fakeDeps({ search_tasks: rows })
+  const t2 = byName(buildTools(deps))
+  const r = await t2.fangcun_search.execute({ query: ' 派单 ' })
+  assert.equal(calls[0].name, 'search_tasks')
+  assert.equal(calls[0].args.query, '派单', '两端空白要 trim 掉，但内容要原样')
+  assert.equal(r.total, 3)
+
+  // 「搜了没中」与「没连上」文案必须不同
+  const none = await t2.fangcun_search.execute({ query: '不存在的词' })
+  assert.match(t2.fangcun_search.output.render({}, { ...none, total: 0 })[0].text, /没有匹配/)
+})
+
+test('⑨b delete_task **永不进白名单**（用户 2026-11-17：「delete_task 永不做」）', () => {
+  // 显式名单，不是"没写就是不做" —— 将来谁想加，这条会红，他就得回来读理由
+  assert.ok(NEVER_ROUTED.has('delete_task'), 'delete_task 必须在 NEVER_ROUTED 里')
+
+  // 白名单里**不许**出现它（任何形式：读路由、写路由、写口 action）
+  for (const v of Object.values(TOOL_ROUTES)) {
+    assert.notEqual(v, 'delete_task', 'TOOL_ROUTES 不许转发 delete_task')
+  }
+  assert.equal(Object.values(WRITE_ACTIONS).includes('delete_task'), false)
+  assert.equal(Object.values(LOG_WRITE_ACTIONS).includes('delete_task'), false)
+  assert.equal('delete_task' in WRITE_ACTIONS, false, '写口 action 里不许有 delete')
+
+  // 运行时也必须打不出去：没有任何工具的 execute 会调它
+  const routes = Object.values(TOOL_ROUTES).filter(Boolean)
+    .concat(Object.values(WRITE_ACTIONS), Object.values(LOG_WRITE_ACTIONS))
+  assert.equal(routes.filter((r) => r === 'delete_task').length, 0)
+  // 而且它不在任何已注册工具的返回路由集合里
+  assert.equal(routes.includes(NEVER_ROUTED.values().next().value), false)
 })
 
 test('⑥ makePipeCallTool 造出来的东西形状对（不真连管道）', () => {

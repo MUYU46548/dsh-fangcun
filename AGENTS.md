@@ -85,6 +85,12 @@
 | 46 | ⚠ **查账别查错文件**：`fangcun/mcp-usage.jsonl` 是 **MCP 调用日志**（字段 `ts / via / ids`，**没有 `card`**）；真账本是 **`fangcun/ai-trace.jsonl`**（`origin=external` 才是 DSH 报的），`card` 字段在那里。2026-11-17 上次日志说"今天 103 条里 74 条没归因（72%）"，按账本重算：**今天 127 条 external 全部带 `card`（100%）**，历史 570 条里 346 条（61%）—— 那个 72% 八成是读了调用日志 | `ai-trace.jsonl` 实读 + 2026-11-17 复核 |
 | 47 | ⚠ **造假环境要"白名单"，不能只覆盖自己记得的那几个变量**（2026-11-17 一晚踩了两次，两次都差点误判成插件 bug）：① 测 `detect.js` 时只覆盖 `APPDATA/LOCALAPPDATA/USERPROFILE`，**漏了 `ProgramData`/`ProgramFiles`** —— 它们继承真 `process.env`，于是查到了本机真实开始菜单的「方寸.lnk」，干净机器报 `installed:true`；② 测 `UsageLedger` 时把选项写成 `dataDir`（应为 `home`），outbox 恒为 0，看着像"记录丢了"。**规则：探针报出"功能坏了"时，先证明探针没写错**（造环境就白名单 + 打印它到底查了哪几处，`checked` 数组就是为这个留的） | 2026-11-17 两次误判 |
 | 48 | ✅ **`detect.js` 五支判定真机全过**（2026-11-17 20:03）：干净机器 → `false` + 查 30 处 + 有 `downloadUrl`；本机 → `true` + `evidence=data-dir`；**cwd 在空目录 `fangcun/` 里不许算痕迹**（`false`）；只有桌面「方寸.lnk」、从没启动过 → `true` + `evidence=shortcut`。第四条是这张功能存在的理由：**装了没跑也得认得出** | 2026-11-17 白名单假环境实测 |
+| 49 | ⚠ **"模型不选插件"这个判断是错的**（2026-11-17 P0 复核）：`tools.jsonl` 的 64 : 206 把时间混在一起了 —— 0.6.3 之前插件工具**根本没真通**。按窗口拆：18:11 之后新建的会话里 **插件 63 : MCP 6**，而那 6 次里 5 次是**插件没有的能力**（`search_tasks`×2、`delete_task`×1）+ 1 次 `unknown tool`（MCP 掉线）。**有能力时模型就走插件；剩下的 MCP 流量几乎全是能力缺口，不是认知问题。** 所以「拆 `fangcun_write`」与「改提示词」两条假设都该作废。⚠ 教训：`tools.jsonl` 有 500 行上限且**跨版本混装**，按名字分组统计前必须先按"工具何时真通"切窗口 | `tools.jsonl` 实算 + `session-74cddd0a` 原文逐条查 |
+| 49b | ⚠ **`search_tasks('')` 回 396 条**（空查询 = 整张看板）。插件侧**必须拒空串与纯空白**，否则模型一个空字符串就能把上下文烧光（用户原话："占满对话就死了"）。另：`search_tasks` 的口径与 `list_tasks` **不同** —— 前者**含已完成/驳回**，后者只有未结卡；实测 `搜"派单"` 10 条跨三项目，而 `list_tasks(project=dsh-fangcun)` 21 张里只有 2 张含这个词 | 2026-11-17 真管道实测；`tool ⑨` |
+| 50 | ✅ **日志三件套（0.6.6）**：`list_logs`/`get_log`/`create_log`/`update_log`/`set_log_status` 插件此前**一个都没有** → 模型想翻第二条日志就得回 MCP。用户原话钉优先级：「真正派活最常用的是从日志走」——**日志是派活的正路，不是附属品**。`get_log` 真实字段：`content`（正文，**不是 `body`**）、`nextSteps`、`continuesFrom`、`chain:{upstream,downstream}`、`attachments`。⚠ **日志写口与卡写口必须分开**：卡有状态机（有闸、有签字），日志只有"在办/不在办"（无闸，只收 `running`/`idle`）—— 塞进 `fangcun_write` 的 action 会让模型以为日志也能 move 成 `待验收` | 2026-11-17 真管道探针；`tool ⑧–⑧d` |
+| 50b | ⚠ **`get_log` 对不存在的 id 回 `{ok:false,error:'Log not found: …'}` + `isError:true`**，而它**仍是数组里的正常对象**。第一版 `shapeLog` 只判"是不是对象"，于是 `{ok:false,…}` 被当成正常日志 → 模型看到 `ok:true` + 一片空白正文。**读失败伪装成"这条日志是空的"，比直接报错更坏**（模型会照着空正文干活）。凡"读一个东西"的形状函数，都必须先判 `ok === false` 分支 | 2026-11-17 探针当场抓到；`tool ⑧b` |
+| 50c | ⚠ **`create_log` 必须 `userAsked:true`**（方寸原文 "Requires userAsked: true, otherwise the call is rejected"）。日志是**用户的私人上下文笔记本，不是 agent 汇报工作的地方** —— 所以插件**连"模型忘了带"都不许替它补**，补了等于替用户同意。收工回写要走卡（`fangcun_write`），不是日志。另：`update_log` **改不了 status**（方寸原文 "Lifecycle fields (status) are NOT here"），而 `taskIds: []` 是**合法的清空**，不能按空串丢掉 | 方寸 `tools.ts` 原文；`tool ⑧c` |
+| 51 | ⚠ **`delete_task` 永不进白名单**（用户 2026-11-17：「delete_task 永不做」）。写成**显式名单** `NEVER_ROUTED` 而不是"没写就是不做"—— 白名单的默认行为是"不在里面就转发不了"，但**没人会去数漏了哪些**；写成显式后 `tool ⑨b` 能钉住，将来谁想加必须先回来读理由。三条硬理由：①**补了模型也会被拒**（方寸 `writeGate.ts` 的 `DESTRUCTIVE_TOOLS` 含 `delete_task`，本机档位是「读写」不含破坏性 → 真机原话"已被拒绝"），发一把永远打不开的钥匙只会让模型以为"方寸坏了"；②**删卡不是 agent 该做的决定**（卡的去留是人的签字，与 `SIGNOFF_STATUSES` 同一口径）；③**真实需求为零**（P0 里唯一那次是模型想删自己造的探针卡，最后改用「驳回」收的） | `writeGate.ts` 原文 + 2026-11-17 真机拒绝原文 |
 
 ## 3. 四条链路（改之前先看懂数据怎么走）
 
@@ -134,16 +140,22 @@ electron-updater 目录 / 开始菜单与桌面快捷方式 / Program Files 与 
 `section()` 放**静态规则段**（`lib/prompt.js`，不掺动态数据，别破坏提示词缓存）+
 `context()` 放**一行现状**（`lib/status.js` 的内存快照，60 秒后台刷新；provider **绝不碰管道**）。
 
-**模型工具**（REV-014 ②，0.4.0 起；`fangcun_context` 0.5.0 起）：`apply()` 里 `root.get('tools')`
-（同样是 `get` 不是 `inject`，理由见事实 11）→ `register()` **四个**定义（`lib/tool.js`）→
-模型调到就开一条管道连接、用完即关。
+**模型工具**（REV-014 ②，0.4.0 起；`fangcun_context` 0.5.0 起；日志三件套 0.6.6；
+`fangcun_search` 0.6.7）：`apply()` 里 `root.get('tools')`（同样是 `get` 不是 `inject`，理由见事实 11）
+→ `register()` **八个**定义（`lib/tool.js`）→ 模型调到就开一条管道连接、用完即关。
 
 | 工具 | 转发 | 说明 |
 |---|---|---|
 | `fangcun_context` | `project_charter` + `decision_list` + `list_tasks` + `list_logs`（**并行**）+ 最新一条 `get_log`（补下一步） | 开工一屏：章程四节 + 决策 + 未结卡 + **上次做到哪**。MCP 那条路要五跳才凑齐 |
-| `fangcun_tasks` | `list_tasks` | 列未结卡（只读） |
+| `fangcun_tasks` | `list_tasks` | 列未结卡（只读，某项目 + 未结） |
+| `fangcun_search` | `search_tasks` | 关键词搜**全部项目、全部状态**（含已完成/驳回）—— 事实 49 |
 | `fangcun_card` | `get_task` | 读一张卡正文（只读） |
-| `fangcun_write` | `create_task` / `update_task` / `move_status`（按 `action`） | 唯一的写口 |
+| `fangcun_write` | `create_task` / `update_task` / `move_status`（按 `action`） | 卡的唯一写口 |
+| `fangcun_logs` | `list_logs` | 列执行日志（只读） |
+| `fangcun_log` | `get_log` | 读一条日志正文 + **接力链上下游**（只读） |
+| `fangcun_log_write` | `create_log` / `update_log` / `set_log_status`（按 `action`） | 日志的唯一写口 —— 事实 50 |
+
+`delete_task` **永不做**（`NEVER_ROUTED` + `tool ⑨b` 钉着）—— 事实 51。
 
 `fangcun_context` 的三条铁律（`tool ⑦/⑦b/⑦c` 钉着）：
 ①**缺节要说「真没写」**，不许替项目编目标；②四处**并行**拉，**有一处通就算连上**（只缺一处单独标）；
@@ -153,7 +165,7 @@ electron-updater 目录 / 开始菜单与桌面快捷方式 / Program Files 与 
 
 **只白名单转发**，不做任意工具名转发。
 工具名是 `fangcun_*` 而**不是** `mcp__fangcun__*`：后者属于方寸 MCP 客户端，它断开时（卡 140864fa）
-那批工具全会消失，而这四个走插件自己的管道，仍然可用。
+那批工具全会消失，而**这八个**走插件自己的管道，仍然可用。
 输出一律**有界**（列表 30 条、正文 4000 字、决策 8 条、卡 12 张）并在超限时明说 —— 上下文是共用资源。
 注册状态进 `health.tools = { registered, names, error }`。
 
@@ -214,6 +226,10 @@ electron-updater 目录 / 开始菜单与桌面快捷方式 / Program Files 与 
 | **挂件口径照方寸的 status 数**（在办/待拍板），`focus` 只配可见列表里的标题，没有就只给卡号 | `cards ⑤`、`widget-dom ⑱⑱b` |
 | apply 真的注册了提示词；没有 `systemPrompt` 服务时不假装成功、其它功能照旧；方寸工具调用落 `tools.jsonl` | `plugin ⑧⑨` |
 | **模型工具是真 ToolDefinition**（name/description/parameters/output/execute 齐全）；**只白名单转发**（不在 `create/update/move` 里的 action 就抛）；参数不全就抛不猜；输出有界且截断明说；**连不上时 `connected:false` + hint，不许回 `total:0` 冒充"没有卡"** | `tool ①②③④④b⑤` |
+| **搜索跨全部状态**（含完成/驳回，否则搜不到"上次怎么解决的"）、封顶 30、截断明说、**空 query 必须拒**（实测回 396 条 = 整张看板） | `tool ⑨` |
+| **`delete_task` 永不进白名单**：`NEVER_ROUTED` 显式名单 + 任何路由/write action 都不许出现它 | `tool ⑨b` |
+| **日志三件套**：列表封顶 20、正文封顶 4000、接力链上下游要带；`create` 必须 `userAsked`（插件**不替模型补**）、日志只有 `running`/`idle`、`update_log` 不许夹带 status、`taskIds:[]` 是合法清空 | `tool ⑧/⑧b/⑧c/⑧d` |
+| **读失败不许伪装成"空"**：`{ok:false}` 分支必须先判（`get_log` 对坏 id 就回这个形状），否则模型拿到 `ok:true` + 空白正文 | `tool ⑧b` |
 | 没有 `tools` 服务时 `health.tools.registered=false` + 写明原因，不假装注册 | `plugin ⑨` |
 | **三件套只报自己那一环**：`health.link` 报方寸装没装/跑没跑 + hint；插件侧不许有 `dsh` 状态字段；没装给下载页、装了没跑说「打开方寸」且**明说不用重启 DSH** | `link ①②③④⑤` |
 | **engines.dsh 不设上界**（写上界会让升级后插件静默消失）；`dsh.compatibility.dsh` 同样只有下限 | `compat ①` |

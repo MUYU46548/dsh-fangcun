@@ -252,14 +252,17 @@ test('⑧ apply：注册规则段 + 一行现状，方寸工具调用落自证�
     assert.equal(typeof contexts[0].text(), 'string', 'provider 必须同步给字符串')
 
     // REV-014 ②：模型工具真的注册上了（这是"挂件 vs 智能层"的分界线）
-    assert.deepEqual(toolDefs.map((d) => d.name).sort(), ['fangcun_card', 'fangcun_context', 'fangcun_tasks', 'fangcun_write'])
+    assert.deepEqual(toolDefs.map((d) => d.name).sort(), [
+      'fangcun_card', 'fangcun_context', 'fangcun_log', 'fangcun_log_write',
+      'fangcun_logs', 'fangcun_search', 'fangcun_tasks', 'fangcun_write',
+    ])
     for (const d of toolDefs) {
       assert.ok(d.output && d.output.schema, d.name + ' 缺 output.schema')
       assert.equal(typeof d.execute, 'function')
     }
     const ht = mod.collectHealth().tools
     assert.equal(ht.registered, true)
-    assert.equal(ht.names.length, 4)
+    assert.equal(ht.names.length, 8)
     assert.equal(ht.error, '')
 
     const hp = mod.collectHealth().prompt
