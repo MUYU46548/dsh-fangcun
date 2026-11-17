@@ -1,5 +1,66 @@
 # 变更记录
 
+## 0.6.4（2026-11-17）· create 会静默吞掉 status
+
+**真机验证 0.6.3 时抓到的**：我用 `fangcun_write` 建草稿卡（`status: '草稿'`），
+落下来的却是 **`待办`**。
+
+### 病
+
+`writeCallOf()` 的 `create` 分支**根本没转发 `status`**：
+
+```js
+if (args.project) call.project = ...
+if (args.body) call.body = ...
+if (args.priority) call.priority = ...
+if (Array.isArray(args.tags)) call.tags = ...
+// ← status 没了
+return { tool, args: call }
+```
+
+而 `parameters` 里**明明声明了 `status`** —— 所以模型看得到、会传，
+插件收了却不发，方寸用默认值落卡。
+
+**为什么这比报错更糟**：模型以为按计划建了草稿，人以为那张卡已经排进队列。
+而「待办」在方寸里是**要过进队列闸**的正式状态（可能需要已批准的澄清问卷），「草稿」不是 ——
+**静默换了一个语义不同的状态**。
+
+### 为什么 123 条测试全绿也没抓到
+
+`test/tool.test.mjs` 那条「全字段都带上」的断言**自己就漏了 status**：
+
+```js
+writeCallOf({ action: 'create', title: 'T', project: 'p', body: 'B', priority: '高', tags: ['a','b'] })
+assert.deepEqual(..., { title, project, body, priority, tags })   // ← 断言里也没有 status
+```
+
+**代码和测试一起漏，所以测试是绿的。**
+⭐ 教训：「全字段」这类断言必须**对着参数声明逐字段数**，不能凭记忆列。
+
+### 修
+
+- `create` 转发 `status`（空值不写，不凭空造）
+- **创建时也不许直接落成「完成」/「驳回」** —— 与 `move` 同一道锁（那是用户的签字）
+- `test ③` 补四条：转发 status / 空 status 不写 / 完成被拒 / 驳回被拒
+- 反例自证：把 status 转发删回去 → 精确变红 1 条（17/1），恢复 18/0
+
+### 真机验证
+
+| 步 | 结果 |
+|---|---|
+| 修前建卡（`status:'草稿'`） | 落成 **`待办`** ❌ |
+| 修后建卡（`status:'草稿'`） | 落成 **`草稿`** ✅ |
+| 拒绝设「完成」 | `「完成」是用户的验收签字，agent 不能设…这是治理层的锁，不要绕` ✅ |
+
+### 同批确认的里程碑
+
+`0.6.3` 是本项目**第一次**让四个模型工具在真机上真正可用
+（0.4.0 起一直零注册，0.6.2 还因 `parameters` 撞 `title` 保留字把整轮对话打挂）。
+本次真调三个只读工具全部成功：`fangcun_tasks` 拿到 373 张卡、
+`fangcun_context` 三处并行且如实报 `missing: ['目标','场景','边界']`、
+`fangcun_card` 读到 2213 字正文。
+
+
 ## 0.6.3（2026-11-17）· 参数 schema 要为"参数名叫 title"负责
 
 真机症状：DSH 发不出消息，provider 回 400 ——

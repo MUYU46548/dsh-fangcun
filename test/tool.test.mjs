@@ -88,6 +88,24 @@ test('③ writeCallOf：参数不全就抛，绝不猜；只放模型真给了�
   })
   assert.deepEqual(full.args, { title: 'T', project: 'p', body: 'B', priority: '高', tags: ['a', 'b'] })
 
+  // ⚠ 2026-11-17 真机抓到的 bug：上面这条「全字段」断言**自己就漏了 status**，
+  //   于是代码也漏了 —— 两边一起错，测试是绿的。症状：模型传 status:'草稿'，
+  //   插件静默忽略 → 方寸落成默认的「待办」（那是要过进队列闸的正式状态，草稿不是）。
+  //   ⭐ 教训：「全字段」这类断言必须**对着参数声明逐字段数**，不能凭记忆列。
+  assert.deepEqual(
+    writeCallOf({ action: 'create', title: 'T', status: '草稿' }),
+    { tool: 'create_task', args: { title: 'T', status: '草稿' } },
+    'create 必须转发 status（否则静默落成默认值「待办」）',
+  )
+  // 空 status = 没给，不许写进去凭空造一个
+  assert.deepEqual(writeCallOf({ action: 'create', title: 'T', status: '   ' }),
+    { tool: 'create_task', args: { title: 'T' } })
+  // 创建时也不许直接落成终态 —— 与 move 同一道锁
+  for (const s of ['完成', '驳回']) {
+    assert.throws(() => writeCallOf({ action: 'create', title: 'T', status: s }), /签字|验收/,
+      `create 不许直接把状态设成「${s}」`)
+  }
+
   // update / move 必须有 id
   assert.throws(() => writeCallOf({ action: 'update', title: 'x' }), /id/)
   assert.throws(() => writeCallOf({ action: 'move', status: '待验收' }), /id/)
