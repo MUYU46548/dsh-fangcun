@@ -16,7 +16,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { checkHost, HOST_CAPABILITIES } from '../lib/compat.js'
+import { checkHost, HOST_CAPABILITIES, LATE_CAPABILITIES } from '../lib/compat.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const pkg = JSON.parse(fs.readFileSync(path.join(here, '..', 'package.json'), 'utf-8'))
@@ -30,6 +30,10 @@ function fullHost() {
       if (name === 'webServer') return { register: () => () => {} }
       if (name === 'systemPrompt') return { section: () => () => {}, context: () => () => {} }
       if (name === 'tools') return { register: () => () => {} }
+      // 2026-11-19 起体检也覆盖设置页 / 客户端半 / 派单三条链路
+      if (name === 'configEditor') return { edit: async () => {} }
+      if (name === 'clientModules') return { clientPath: () => 'C:/tmp/client.js' }
+      if (name === 'agents') return { create: async () => ({}) }
       return undefined
     },
   }
@@ -51,7 +55,7 @@ test('① package.json 不设 DSH 上界 —— 否则升级后插件被静默�
 test('② 全能力宿主：无警告，summary 说正常', () => {
   const r = checkHost(fullHost())
   assert.deepEqual(r.warnings, [])
-  assert.match(r.summary, /全部 6 项宿主能力正常/)
+  assert.match(r.summary, new RegExp(`全部 ${HOST_CAPABILITIES.length} 项宿主能力正常`))
   for (const cap of HOST_CAPABILITIES) {
     assert.equal(r.capabilities[cap.key], 'ok', cap.key + ' 应当是 ok')
   }
@@ -64,7 +68,7 @@ test('③ 空宿主（真正的老宿主）：全 missing，但**不抛**', () =
   for (const cap of HOST_CAPABILITIES) {
     assert.equal(r.capabilities[cap.key], 'missing')
   }
-  assert.match(r.summary, /0\/6 项正常/)
+  assert.match(r.summary, new RegExp(`0/${HOST_CAPABILITIES.length} 项正常`))
   // 每条警告都要说人话（带"这块不可用"或"可能部分失效"）
   for (const w of r.warnings) assert.match(w, /不可用|可能部分失效/)
 })
@@ -87,6 +91,28 @@ test('④ 形状变了（服务在但方法不对）= degraded，与 missing 区
   assert.equal(r.capabilities.systemPrompt, 'degraded')
   // degraded 的提示要指出"宿主大概改过 API"，而不是含糊
   assert.ok(r.warnings.some((w) => /形状不像预期/.test(w) && /改过 API/.test(w)))
+})
+
+test('④b 新增三项（设置页 / 客户端半 / 派单）也要能报 degraded', () => {
+  // 2026-11-19：这三条链路此前不在体检里 —— DSH 升级把 edit/clientPath/create 改掉，
+  // health.compat 仍然一片绿，只能等用户撞上"保存报错 / 没方寸一节 / 派单不开会话"。
+  const host = {
+    on() { return () => {} },
+    effect(fn) { fn() },
+    get(name) {
+      if (name === 'configEditor') return { notEdit: true }      // 没有 edit
+      if (name === 'clientModules') return { clientPath: 'x' }   // 不是函数
+      if (name === 'agents') return {}                           // 没有 create
+      return undefined
+    },
+  }
+  const r = checkHost(host)
+  assert.equal(r.capabilities.configEditor, 'degraded')
+  assert.equal(r.capabilities.clientModules, 'degraded')
+  assert.equal(r.capabilities.agents, 'degraded')
+  for (const key of ['configEditor', 'clientModules', 'agents']) {
+    assert.ok(r.warnings.some((w) => w.includes(key) && /改过 API/.test(w)), key + ' 要有一句人话')
+  }
 })
 
 test('⑤ 探测本身抛异常也不外泄：记成缺口，插件照常', () => {
@@ -119,4 +145,10 @@ test('⑥ 结论形状固定：health 直接能读，且带时间戳', () => {
   assert.equal(typeof r.summary, 'string')
   assert.ok(Array.isArray(r.warnings))
   assert.equal(typeof r.capabilities, 'object')
+})
+
+test('⑦ 后挂服务清单：设置页 / 客户端半 / 派单标 late（体检会多等它们一会）', () => {
+  // 这三个服务实测比插件 apply 晚几秒才进上下文。标成 late 后 index.js 的重试窗口
+  // 会从 3 轮拉到 10 轮（~15 秒），避免把"还没挂上"报成"宿主没有"。
+  assert.deepEqual([...LATE_CAPABILITIES].sort(), ['agents', 'clientModules', 'configEditor'])
 })
