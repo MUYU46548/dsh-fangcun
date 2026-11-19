@@ -43,8 +43,11 @@ mod.default.apply({
 
 assert.deepEqual(
   registered.map((r) => r.path).sort(),
-  ['/fangcun/api/tasks', '/fangcun/api/widget-report', '/fangcun/health.json', '/fangcun/widget.js'],
-  '发布包里的路由必须齐',
+  [
+    '/fangcun/api/settings', '/fangcun/api/tasks', '/fangcun/api/widget-report',
+    '/fangcun/health.json', '/fangcun/widget.js',
+  ],
+  '发布包里的路由必须齐（0.7.0 起是 5 条，含设置页）',
 )
 
 // 0.4.0：模型工具必须真的注册（发布包漏掉 lib/tool.js 就是"装了但模型还是调不到"）

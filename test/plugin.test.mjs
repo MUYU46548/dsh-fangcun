@@ -430,3 +430,19 @@ test('⑨ 宿主没有 systemPrompt 服务时：不假装注册，health 如实�
     fs.rmSync(home, { recursive: true, force: true })
   }
 })
+
+// ── ⑪ 路由名单两处同步（2026-11-19）─────────────────────────────────────────
+//
+// 病：0.7.0 加了 `/fangcun/api/settings`（5 条路由），而 `test/smoke-packed.mjs`
+// 仍钉着 4 条的旧名单。`npm test` 的脚本列表里**没有** smoke-packed（它要求先 npm pack），
+// 所以本地 152/152 全绿，**打 tag 后 CI 必红** —— 与 0.6.7 工具名单那次是同一类事故。
+// 修法不是"下次记得"：这里读 smoke 源码，把期望数组抠出来跟 `ROUTES` 比。
+test('⑪ 路由名单两处同步：smoke-packed 的旧名单不许漂移（CI 才跑的那份）', () => {
+  const src = read('test/smoke-packed.mjs')
+  const m = /registered\.map\(\(r\)\s*=>\s*r\.path\)\.sort\(\),\s*\[([\s\S]*?)\]/.exec(src)
+  assert.ok(m, 'smoke-packed.mjs 里找不到路由断言 —— 结构变了就更新本条')
+  const listed = m[1].split(',').map((s) => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean).sort()
+  const need = mod.ROUTES.map((r) => r.path).sort()
+  assert.deepEqual(listed, need,
+    'smoke-packed.mjs 的路由名单与 ROUTES 漂移了（这条只有 CI 会红，所以必须在这里先红）')
+})
