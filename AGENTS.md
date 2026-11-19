@@ -260,7 +260,7 @@ electron-updater 目录 / 开始菜单与桌面快捷方式 / Program Files 与 
 ## 5. 本地怎么跑
 
 ```powershell
-npm test        # 150 条，不需要 DSH、不需要真方寸（真起假管道）
+npm test        # 151 条，不需要 DSH、不需要真方寸（真起假管道）
 npm pack        # 验发布包；CI 会把 tgz 解出来真 apply 一次
 ```
 

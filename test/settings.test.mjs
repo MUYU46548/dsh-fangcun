@@ -203,3 +203,32 @@ test('⑤ 没有 configEditor：GET 如实说不可写，PUT 501（不许假装�
   assert.equal(put.status, 501)
   assert.match(put.json.error, /configEditor/)
 })
+
+test('⑥ health 的 settings 当场问宿主，不照抄 apply 时那一拍', () => {
+  // 真机踩过：configEditor 比本插件晚就绪，apply 时记成 false 之后 health 一直写 false，
+  // 而 GET /fangcun/api/settings 当场问却是 true —— 同一个页面两个答案。
+  let editor = null
+  const root = {
+    fiber: { entry: { options: { id: 'dsh-fangcun' } } },
+    on() { return () => {} },
+    effect(fn) {
+      const off = fn()
+      return typeof off === 'function' ? off : () => {}
+    },
+    inject(_list, cb) {
+      cb({ webServer: { register() { return () => {} } }, effect(fn) { fn() } })
+    },
+    get(name) {
+      if (name === 'configEditor') return editor
+      return undefined
+    },
+    logger: { warn() {} },
+  }
+  mod.default.apply(root, {})
+  assert.equal(mod.collectHealth({}).settings.writable, false, 'apply 时服务还没挂 → false')
+  editor = { async edit() {} }
+  const health = mod.collectHealth({})
+  assert.equal(health.settings.writable, true, '服务挂上后 health 必须跟着变 true')
+  assert.equal(health.settings.entryId, 'dsh-fangcun')
+  assert.equal(health.settings.error, '')
+})

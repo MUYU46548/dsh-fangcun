@@ -34,12 +34,18 @@ volatile 字段，而且 README 明说"no shipped client does so yet"。所以�
 
 ### 四、验证
 
-- `npm test`：**150/150**（新增 `settings ①–⑤`、`client ①–④`、`widget-dom ⑲`）；
+- `npm test`：**151/151**（新增 `settings ①–⑥`、`client ①–④`、`widget-dom ⑲`）；
 - 真机：`plugin_manager set_plugin(include:dsh-fangcun)` 后 `health.plugin.version` 变 0.7.0，
   `health.client.available=true`、`settings.writable=true`，**没重启 DSH**；
+- **真机 PUT 真写过一次**（2026-11-19）：`dataDir` 写成当时生效的同一个值 → profile patch 出现
+  `- id: dsh-fangcun … config: dataDir: …`、插件重启后 `health.fangcun.source=config`；
+  再清空 → 该行整条移除、patch 哈希回到原值（前后 `3E5295…7589` 一致），没留野行；
 - 页面自证：刷新后 `health.widget.page.events` 出现 `client-apply` / `client-section`，
   同时 `boot/mount/probe` 恢复、`probe.tb=40/hit=fc-pill`；
 - 桌面端刷新后 `injected/pushed` 仍为 0（窗口缓存，见 AGENTS 事实 54），判据改用 page 事件。
+- ⚠ 修一个自查发现的小 bug：`health.settings` 原先照抄 apply 那一拍，而 `configEditor` 比本插件
+  晚就绪 → 页面能保存、health 却一直写 `writable:false`（同一个页面两个答案）。现在 health 与
+  GET 路由一样**当场问宿主**（`settings ⑥` 钉着）。
 
 **未发版**（用户此前说过「暂不发版，全世界装的人不会超过三个」）；本机 `link:` 已生效。
 设置页的**人眼视觉确认**还没做：用户打开设置面板看到「方寸」一节才算数。
