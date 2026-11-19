@@ -96,6 +96,7 @@
 | 54 | ⚠ **桌面端刷新页面 ≠ 重新收集注入表**：HMR 之后 `widget.injected/pushed` 会一直停在 0，即使页面刷新、挂件已经恢复（2026-11-18 真机：刷新后 `servedByPage=1`、`page.events=boot/mount/probe`、`probe.tb=40/hit=fc-pill`，`injected/pushed` 仍 0）。原因是桌面主进程按**窗口**缓存了 boot 表；`collectIndexInjections()` 的"每次新发一张表"只在宿主侧成立，页面刷新走的是窗口缓存。**判挂件恢复看 `page.events` + `servedByPage`，不看 `injected/pushed`**；后者只在新建窗口/宿主启动时可靠 | 2026-11-18 真机：DevTools 里 Ctrl+R 后 page 事件恢复而 injected/pushed=0 |
 | 55 | ✅ **设置页自证**：client 模块 `apply` 时向 `/fangcun/api/widget-report` 发 `client-apply`，`settings.section` 注册成功后再发 `client-section`；`health.widget.page.events` 里能看到这两行，证明"客户端半真的在页面里跑、且注册成功"，不靠人眼。事件名带 `client-` 前缀，与挂件的 `boot/mount/probe` 共用同一只读信标 | `client ③` + 2026-11-18 真机（`client-apply` / `client-section` 各出现两次） |
 | 56 | **规划从骨架长出来**：方寸 `contextPack.ts` 第 3 节已经把 `### 结构地图` 放进上下文包；`dispatchToDsh(project, 'plan')` 写 `kind: plan` 派单，插件开会话并给规划话术（四类判据 + 引用依据 + 不砍功能 + 只有用户能拍板）。所以"让骨架长出规划"不是隐式知识：**先让结构地图不是"待填"，规划才有东西可指**。dsh-fangcun 的结构地图仍待卡 `af3520b5` 批准并 `smap_apply`；用户 2026-11-18 已把"真跑 kind=plan"推迟，别催 | `contextPack.ts` ③ + 卡 `24ee1b42` |
+| 57 | ⚠ **`memory_briefing` 是分页的**：`limit` 只截这一页，回 `total / returned / truncated`。截断口径必须用方寸的 `total`，照 `items.length` 算会把"11 条只给 5 条"写成"共 5 条"，**静默吞掉"还有 6 条"**（2026-11-19 review 时真机踩到）。`memoriesUnavailable` 只表示**没拉到**，不许渲染成"这个项目没有记忆" | `tool ⑦`（`total:6 / returned:2 / truncated:true`）+ 2026-11-19 真机 `memory_briefing`（total 11 / returned 5） |
 
 ## 3. 四条链路（改之前先看懂数据怎么走）
 
@@ -154,12 +155,12 @@ electron-updater 目录 / 开始菜单与桌面快捷方式 / Program Files 与 
 `context()` 放**一行现状**（`lib/status.js` 的内存快照，60 秒后台刷新；provider **绝不碰管道**）。
 
 **模型工具**（REV-014 ②，0.4.0 起；`fangcun_context` 0.5.0 起；日志三件套 0.6.6；
-`fangcun_search` 0.6.7）：`apply()` 里 `root.get('tools')`（同样是 `get` 不是 `inject`，理由见事实 11）
+`fangcun_search` 0.6.7；context 带记忆简报 0.7.1）：`apply()` 里 `root.get('tools')`（同样是 `get` 不是 `inject`，理由见事实 11）
 → `register()` **八个**定义（`lib/tool.js`）→ 模型调到就开一条管道连接、用完即关。
 
 | 工具 | 转发 | 说明 |
 |---|---|---|
-| `fangcun_context` | `project_charter` + `decision_list` + `list_tasks` + `list_logs`（**并行**）+ 最新一条 `get_log`（补下一步） | 开工一屏：章程四节 + 决策 + 未结卡 + **上次做到哪**。MCP 那条路要五跳才凑齐 |
+| `fangcun_context` | `project_charter` + `decision_list` + `list_tasks` + `list_logs` + `memory_briefing`（**并行**）+ 最新一条 `get_log`（补下一步） | 开工一屏：章程四节 + 决策 + 未结卡 + **踩过的坑 / 纪律（记忆层）** + **上次做到哪**。MCP 那条路要六跳才凑齐 |
 | `fangcun_tasks` | `list_tasks` | 列未结卡（只读，某项目 + 未结） |
 | `fangcun_search` | `search_tasks` | 关键词搜**全部项目、全部状态**（含已完成/驳回）—— 事实 49 |
 | `fangcun_card` | `get_task` | 读一张卡正文（只读） |
@@ -170,9 +171,11 @@ electron-updater 目录 / 开始菜单与桌面快捷方式 / Program Files 与 
 
 `delete_task` **永不做**（`NEVER_ROUTED` + `tool ⑨b` 钉着）—— 事实 51。
 
-`fangcun_context` 的三条铁律（`tool ⑦/⑦b/⑦c` 钉着）：
-①**缺节要说「真没写」**，不许替项目编目标；②四处**并行**拉，**有一处通就算连上**（只缺一处单独标）；
-③缺 `project` 就抛，不许默认成"全部项目"去猜。
+`fangcun_context` 的四条铁律（`tool ⑦/⑦b/⑦c` 钉着）：
+①**缺节要说「真没写」**，不许替项目编目标；②五处**并行**拉，**有一处通就算连上**（只缺一处单独标）；
+③缺 `project` 就抛，不许默认成"全部项目"去猜；
+④**记忆拉失败 ≠ 没有记忆**：`memoriesUnavailable=true` 时渲染成「没拉到，这不等于没踩过坑」，
+不许说成"这个项目很干净"。
 「上次做到哪」只取**最新一条**日志的标题 + 下一步（`MAX_LOG_BLURB` 600 字）：正文不塞 ——
 那可能是几万字，而且它不是任务卡（渲染里明写这句，否则模型会照着抄）。
 
@@ -255,12 +258,13 @@ electron-updater 目录 / 开始菜单与桌面快捷方式 / Program Files 与 
 | **设置 > 环境变量 > 自动探测**；空字符串 = 清掉覆盖（不是设成空路径）；相对数据根 / 非 Windows 管道 / 未知键 / 非字符串一律拒；只收本机 + 同源；没有 `configEditor` 时明说不可写、不假装保存 | `settings ①–⑤` |
 | **client 半清单/模块格式**：`dsh.client.platform='web'` + `exports['./client']` + `files` 三处同步；`__ModuleLoader__.load({ id: 包名, factory })`；apply 注册 `settings.section`「方寸」；没有 slots 服务时安静退场 | `client ①–④` |
 | **挂件 API 立刻生效**：`setHidden` / `setCorner` / `applySettings` 改状态并落 `localStorage`；隐藏后仍留能捞回来的小点 | `widget-dom ⑲` |
+| **记忆简报有界且截断明说**：最多 5 条、用方寸的 `total` 报全量（不是这一页）、`memoriesUnavailable` 单独标（不许说成"没有记忆"） | `tool ⑦/⑦b` |
 | health 只报能自证的事实、不泄凭据 | `plugin ⑤` |
 
 ## 5. 本地怎么跑
 
 ```powershell
-npm test        # 151 条，不需要 DSH、不需要真方寸（真起假管道）
+npm test        # 152 条，不需要 DSH、不需要真方寸（真起假管道）
 npm pack        # 验发布包；CI 会把 tgz 解出来真 apply 一次
 ```
 
@@ -422,10 +426,11 @@ runner 是 **`windows-latest` + Git Bash**：插件只支持 Windows，`detect` 
    `probe.tb=40/hit=fc-pill`。**注意** `injected/pushed` 仍是 0（事实 54），那是桌面端窗口缓存，
    不是失败；判据改成 page 事件。卡 `d462c0df` 可送 `待验收`。
 
-14. **设置页视觉确认还没做**：`client-apply` / `client-section` 两行已经在真机页面里出现（事实 55），
-   说明 client 半加载且注册成功；但**用户还没打开设置面板看那一节**。打开后如果「方寸」一节
-   不出现、或保存报错，按 `health.settings.writable` / `error` 和 `health.client.available` 分诊。
-   这一条不要自己宣布"已验收"。
+14. ✅ **设置页真机确认（2026-11-19）**：用户确认设置面板里「方寸」一节在（原话"昨天就已经有了"），
+   并点过一次「保存」；后端 PUT 真写过（`dataDir` 写同值 → profile patch 出现该行 → 重启后
+   `source=config`；清空后整行移除、patch 哈希回到原值）。用户点保存那一刻三项都空：
+   patch 文件被重写但内容不变、插件没重启 —— 行为正确，但 UI 仍回"插件会重启一次"。
+   **已修**：没有变化就不碰 profile、不重启，回「已保存：没有变化」（`settings ④` 钉着）。
 
 15. **P2「先查后改率 30%」的口径不对，不是规则失效**（2026-11-18 复核）：
    `turns.jsonl` 里 210 个改文件轮次中，`readBeforeEdit=62`（29.5%）；但拆开看：

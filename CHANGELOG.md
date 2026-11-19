@@ -1,5 +1,46 @@
 # 变更记录
 
+## 0.7.1（2026-11-19）· `fangcun_context` 带记忆层简报：开工前看见踩过的坑
+
+用户 2026-11-17：「方寸要管记忆，**当 DSH 的记忆层**」「你做之前真的有看过其他家的记忆是怎么实现的吗？」
+
+### 一、context 第五处：`memory_briefing`
+
+`fangcun_context` 原来并行拉四处（章程 / 决策 / 未结卡 / 最新日志）。现在加第五处
+`memory_briefing`：**这个项目 + 跨项目**的有效事故/教训/纪律，按影响再按时间排序，
+默认 5 条；只给 id / 类型 / 影响 / 标题 / 指针，正文仍用 `memory_read` 取。
+
+- 为什么是"开工前自动出现"而不是"让模型自己去搜"：Claude memory tool 是开始任务前检查
+  `/memories`，Basic Memory 是 session-start briefing，Letta 是核心记忆常驻 —— 同一个动作。
+- **有界**：最多 5 条；超了明说"共 N 条，只列前 5 条"。
+- **拉失败 ≠ 没有记忆**：老版方寸没有 `memory_briefing` 时，`memoriesUnavailable=true`，
+  渲染成「没拉到记忆，这不等于没踩过坑」，不许说成"这个项目很干净"。
+- 待审批 / 已撤销不进简报（它们不算数）。
+
+### 二、逐轮度量补 `editFirst`（与记忆层同一版发出）
+
+- `lib/proof.js` 的 `verdictOf` 新增 `editFirst = editAt === 1 && 首工具∈EDIT_TOOLS`，
+  `health.proof.turns` 单列；`cards ③f` 钉住。真机 309 轮：`editFirst 18 / 5.9%`。
+- 为什么：`readBeforeEdit` 29.5% 看着像规则失效，拆开看"上来就改"的只有 7.6%；
+  其余多是"上一轮已经查过"的续作轮次。指标改成可行动的那个，**不据此改提示词**。
+
+### 三、验证
+
+- `npm test`：**152/152**（`tool ⑦` 并行名单五处 + 简报渲染 / `memoriesUnavailable`；`cards ③f`）；
+- 真机（DSH 2026-11-19 重启后 0.7.1）：`health.proof.turns.editFirst=18`；
+- 桌面端 `e2e-memory`：**65/0**（方寸侧跑的，`memory_briefing` 的排序 / 排除 / 有界 / 待审批不可见）。
+
+### 四、review 时修的两处口径
+
+1. `memory_briefing` 是**分页**的（`limit` 只截这一页，回 `total / returned / truncated`）。
+   初版按 `memories.length` 算"共几条"——真机上这个项目有 11 条、请求 5 条，
+   会写成"共 5 条"，把"还有 6 条没给你看"静默吞掉。现在截断口径改用方寸回的
+   `total` / `truncated`，`tool ⑦` 用 `total:6 / returned:2` 钉住。
+2. **设置页「保存」没有变化却谎报重启**（用户 2026-11-19 点完保存原话"感觉没什么用"）：
+   三项都空时 PUT 仍把 profile 重写一遍（内容不变），回包却写 `restarting:true` +
+   "插件会重启一次"。现在先比对归一后的配置：**没变化就不碰 profile、不重启**，
+   回「已保存：没有变化」；`settings ④` 钉住。
+
 ## 0.7.0（2026-11-18）· DSH 设置页：数据根 / 管道 / 项目范围 / 挂件都能在 DSH 里改
 
 用户原话：「别人的插件都支持直接在 DSH 里设置，方寸可以吗？目前好像没看到，只有个小挂件右键菜单。」

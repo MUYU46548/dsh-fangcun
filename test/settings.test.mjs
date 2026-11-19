@@ -189,6 +189,15 @@ test('④ 设置路由：GET 说清能不能写；PUT 只收本机同源，脏�
   assert.equal(cleared.status, 200)
   assert.deepEqual(saved, { legacy: 1 }, '空字符串必须删键，不是写成空覆盖')
   assert.deepEqual(cleared.json.values, { dataDir: '', pipePath: '', project: '' })
+
+  // 2026-11-19 真机：三项都空时点「保存」，profile 被重写了一遍、UI 却说"会重启一次"，
+  // 用户原话"感觉没什么用"。没有变化就该直接说没有变化，且不碰 profile。
+  const before = saved
+  const noop = await call(route, putReq({ dataDir: '', pipePath: '', project: '' }))
+  assert.equal(noop.status, 200)
+  assert.equal(noop.json.restarting, false, '没变化就不许说"会重启"')
+  assert.match(noop.json.message, /没有变化/)
+  assert.equal(saved, before, '没变化就不该调 configEditor（别白写一遍 profile）')
 })
 
 test('⑤ 没有 configEditor：GET 如实说不可写，PUT 501（不许假装保存）', async () => {
