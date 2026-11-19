@@ -129,6 +129,7 @@ test('③ 逐轮度量：先查后改 / 改了没回写 / 只查不干，各自�
   v = verdictOf(row2)
   assert.equal(v.withEdit, true)
   assert.equal(v.readBeforeEdit, false, '没先查就是没先查，不许虚报')
+  assert.equal(v.editFirst, true, '首工具就是写文件 —— ②7 的可行动口径')
   assert.equal(v.wroteBack, false)
 
   // 第 3 轮：只查了方寸，别的没动（②10 的可疑信号）
@@ -137,12 +138,55 @@ test('③ 逐轮度量：先查后改 / 改了没回写 / 只查不干，各自�
   assert.equal(verdictOf(row3).readOnly, true)
 
   const stats = summarize([row1, row2, row3])
-  assert.deepEqual(stats, { turns: 3, withEdit: 2, readBeforeEdit: 1, wroteBack: 1, readOnly: 1, withShell: 1 })
+  assert.deepEqual(stats, { turns: 3, withEdit: 2, readBeforeEdit: 1, editFirst: 1, wroteBack: 1, readOnly: 1, withShell: 1 })
   assert.deepEqual(proof.state().turns, stats, 'health 读的就是这份汇总')
 
   // 重启（新建实例）：数字从 turns.jsonl 读回来，不归零
   const again = new ToolProof({ home })
   assert.deepEqual(again.state().turns, stats, '跨重启累计 —— 不然"这几天有没有联动"证明不了')
+  fs.rmSync(home, { recursive: true, force: true })
+})
+
+test('③f 首工具就是编辑的轮次单独立账（editFirst），不与 readBeforeEdit 混为一谈', () => {
+  // 为什么单独立：2026-11-18 复核 210 个改文件轮次 —— readBeforeEdit 29.5% 看着像规则失效，
+  // 拆开看"首工具就是编辑"的只有 7.6%，其余多是"上一轮已经查过"的续作轮次。
+  // 所以可行动的指标是 editFirst，不是拿 30% 去改提示词。
+  const home = tmpHome()
+  const proof = new ToolProof({ home })
+  const s = session('session-ffff6666')
+  const call = (turn, name) => proof.record(s, { type: 'tool/call', data: { turn, name } })
+  const end = (turn) => proof.record(s, { type: 'turn/end', data: { turn } })
+
+  // ① 上来就 apply_patch：editFirst（首工具是编辑）
+  call(1, 'apply_patch')
+  const rowA = end(1)
+  const a = verdictOf(rowA)
+  assert.equal(a.withEdit, true)
+  assert.equal(a.editFirst, true)
+  assert.equal(a.readBeforeEdit, false)
+
+  // ② 先 read 再 edit：不是 editFirst（读了文件，但没查方寸 —— 这是另一件事）
+  call(2, 'read')
+  call(2, 'edit')
+  const rowB = end(2)
+  const b = verdictOf(rowB)
+  assert.equal(b.editFirst, false)
+  assert.equal(b.readBeforeEdit, false)
+
+  // ③ 先查方寸再改：readBeforeEdit，但不是 editFirst
+  call(3, 'fangcun_tasks')
+  call(3, 'write')
+  const rowC = end(3)
+  const c = verdictOf(rowC)
+  assert.equal(c.editFirst, false)
+  assert.equal(c.readBeforeEdit, true)
+
+  // ④ 没改文件：editFirst 恒 false（哪怕首工具不是编辑）
+  call(4, 'pwsh')
+  assert.equal(verdictOf(end(4)).editFirst, false)
+
+  const stats = summarize([rowA, rowB, rowC])
+  assert.equal(stats.editFirst, 1, '三轮里只有一轮是"上来就改"')
   fs.rmSync(home, { recursive: true, force: true })
 })
 
