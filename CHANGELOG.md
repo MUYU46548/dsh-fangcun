@@ -1,5 +1,49 @@
 # 变更记录
 
+## 0.7.0（2026-11-18）· DSH 设置页：数据根 / 管道 / 项目范围 / 挂件都能在 DSH 里改
+
+用户原话：「别人的插件都支持直接在 DSH 里设置，方寸可以吗？目前好像没看到，只有个小挂件右键菜单。」
+
+### 一、新增 client 半（`client.js`）
+
+DSH 0.2 线不会给第三方插件自动生成设置表单 —— `dsh-settings` 只自动渲染 `Config` 的
+volatile 字段，而且 README 明说"no shipped client does so yet"。所以照已装插件的实际做法：
+
+- `package.json` 加 `dsh.client.platform='web'` + `exports['./client']`；
+- 根目录 `client.js` 用 `window.__ModuleLoader__.load({ id: 'dsh-fangcun', factory })`；
+- `apply(ctx)` 里 `ctx.slots.inject('settings.section', …)` 注册一节「方寸」。
+
+设置页有三块：**状态**（连接 / 版本 / 数据根来源 / 管道 / 项目 / 未完成与在办）、
+**连接设置**（数据根、管道、项目范围，保存与恢复默认）、**挂件**（显示/隐藏、四角摆位）。
+挂件改动直接写 `localStorage` 并调 `window.__fcTodoWidget`，点完立刻生效，不用刷新。
+
+### 二、宿主侧：三项覆盖 + 设置路由
+
+- `apply(root, config)` 读 Loader 行 config；`resolveDataDir` / `resolvePipePath` /
+  `resolveProjectScope` 的优先级变成 **设置 > 环境变量 > 自动探测**；`health.fangcun.source`
+  会如实写 `config`。
+- 新路由 `GET/PUT /fangcun/api/settings`：只收本机 + 同源；PUT 校验（绝对数据根、
+  Windows 管道前缀、未知键、非字符串）后走 `configEditor.edit(entry, …)` 写 profile patch，
+  保存后 Loader 重启本插件。**没有 `configEditor` 时回 501 + 原因，不假装保存。**
+- `health` 新增 `settings`（三项值 / 是否可写 / 错误）与 `client`（客户端半是否进模块表、路径）。
+
+### 三、挂件新增只读 API
+
+`window.__fcTodoWidget = { snapshot, applySettings, setCorner, setHidden, refresh }`，
+给设置页联动用；挂件自己的右键菜单、拖动、四角逻辑不变。
+
+### 四、验证
+
+- `npm test`：**150/150**（新增 `settings ①–⑤`、`client ①–④`、`widget-dom ⑲`）；
+- 真机：`plugin_manager set_plugin(include:dsh-fangcun)` 后 `health.plugin.version` 变 0.7.0，
+  `health.client.available=true`、`settings.writable=true`，**没重启 DSH**；
+- 页面自证：刷新后 `health.widget.page.events` 出现 `client-apply` / `client-section`，
+  同时 `boot/mount/probe` 恢复、`probe.tb=40/hit=fc-pill`；
+- 桌面端刷新后 `injected/pushed` 仍为 0（窗口缓存，见 AGENTS 事实 54），判据改用 page 事件。
+
+**未发版**（用户此前说过「暂不发版，全世界装的人不会超过三个」）；本机 `link:` 已生效。
+设置页的**人眼视觉确认**还没做：用户打开设置面板看到「方寸」一节才算数。
+
 ## 0.6.7（2026-11-17）· `fangcun_search`：关键词全文搜索（跨全部项目与状态）
 
 用户拍板：「**`search_tasks` 必须补，`delete_task` 永不做**」。两句话，两个动作。

@@ -91,6 +91,11 @@
 | 50b | ⚠ **`get_log` 对不存在的 id 回 `{ok:false,error:'Log not found: …'}` + `isError:true`**，而它**仍是数组里的正常对象**。第一版 `shapeLog` 只判"是不是对象"，于是 `{ok:false,…}` 被当成正常日志 → 模型看到 `ok:true` + 一片空白正文。**读失败伪装成"这条日志是空的"，比直接报错更坏**（模型会照着空正文干活）。凡"读一个东西"的形状函数，都必须先判 `ok === false` 分支 | 2026-11-17 探针当场抓到；`tool ⑧b` |
 | 50c | ⚠ **`create_log` 必须 `userAsked:true`**（方寸原文 "Requires userAsked: true, otherwise the call is rejected"）。日志是**用户的私人上下文笔记本，不是 agent 汇报工作的地方** —— 所以插件**连"模型忘了带"都不许替它补**，补了等于替用户同意。收工回写要走卡（`fangcun_write`），不是日志。另：`update_log` **改不了 status**（方寸原文 "Lifecycle fields (status) are NOT here"），而 `taskIds: []` 是**合法的清空**，不能按空串丢掉 | 方寸 `tools.ts` 原文；`tool ⑧c` |
 | 51 | ⚠ **`delete_task` 永不进白名单**（用户 2026-11-17：「delete_task 永不做」）。写成**显式名单** `NEVER_ROUTED` 而不是"没写就是不做"—— 白名单的默认行为是"不在里面就转发不了"，但**没人会去数漏了哪些**；写成显式后 `tool ⑨b` 能钉住，将来谁想加必须先回来读理由。三条硬理由：①**补了模型也会被拒**（方寸 `writeGate.ts` 的 `DESTRUCTIVE_TOOLS` 含 `delete_task`，本机档位是「读写」不含破坏性 → 真机原话"已被拒绝"），发一把永远打不开的钥匙只会让模型以为"方寸坏了"；②**删卡不是 agent 该做的决定**（卡的去留是人的签字，与 `SIGNOFF_STATUSES` 同一口径）；③**真实需求为零**（P0 里唯一那次是模型想删自己造的探针卡，最后改用「驳回」收的） | `writeGate.ts` 原文 + 2026-11-17 真机拒绝原文 |
+| 52 | ✅ **DSH 内设置页（0.7.0）**：DSH 0.2 线**不会**给第三方插件自动生成设置表单（`dsh-settings` 只自动渲染 `Config` 的 volatile 字段，README 明说"no shipped client does so yet"）。实际做法三种文件：①`package.json` 加 `dsh.client.platform='web'` + `exports['./client']`；②根目录 `client.js` 用 `window.__ModuleLoader__.load({ id: <包名>, factory })`；③`apply(ctx)` 里 `ctx.slots.inject('settings.section', …)` 注册一节。宿主侧：`apply(root, config)` 读 Loader 行 config → `GET/PUT /fangcun/api/settings` → 写走 `configEditor.edit(entry, current => next)`（官方 `references/configuration.md`；普通字段保存后 Loader 重启本插件）。**不导出 `Config`**：那要 `@deepseek-ai/schemastery`，违反零依赖（`layering ⑤` 连 peer 都禁） | `dsh-settings` / `dsh-client-modules` README + `dsh-keep-awake` 实例 + 2026-11-18 真机 |
+| 53 | ⚠ **`dsh.client` 是清单变更，只在 Loader 条目启动/重启时被重读**：改完 `package.json` 后光保存文件不够，要 `plugin_manager set_plugin`（`target=include:dsh-fangcun`）让条目重启；`health.client.available=true` 才算进了模块表（`clientPath` 有绝对路径）。本机 2026-11-18 实测：0.6.7→0.7.0 加 client 半，重启用的是**运行中的 HMR**，没有重启 DSH | `dsh-client-modules` README "A manifest edit alone is not observed" + 真机 |
+| 54 | ⚠ **桌面端刷新页面 ≠ 重新收集注入表**：HMR 之后 `widget.injected/pushed` 会一直停在 0，即使页面刷新、挂件已经恢复（2026-11-18 真机：刷新后 `servedByPage=1`、`page.events=boot/mount/probe`、`probe.tb=40/hit=fc-pill`，`injected/pushed` 仍 0）。原因是桌面主进程按**窗口**缓存了 boot 表；`collectIndexInjections()` 的"每次新发一张表"只在宿主侧成立，页面刷新走的是窗口缓存。**判挂件恢复看 `page.events` + `servedByPage`，不看 `injected/pushed`**；后者只在新建窗口/宿主启动时可靠 | 2026-11-18 真机：DevTools 里 Ctrl+R 后 page 事件恢复而 injected/pushed=0 |
+| 55 | ✅ **设置页自证**：client 模块 `apply` 时向 `/fangcun/api/widget-report` 发 `client-apply`，`settings.section` 注册成功后再发 `client-section`；`health.widget.page.events` 里能看到这两行，证明"客户端半真的在页面里跑、且注册成功"，不靠人眼。事件名带 `client-` 前缀，与挂件的 `boot/mount/probe` 共用同一只读信标 | `client ③` + 2026-11-18 真机（`client-apply` / `client-section` 各出现两次） |
+| 56 | **规划从骨架长出来**：方寸 `contextPack.ts` 第 3 节已经把 `### 结构地图` 放进上下文包；`dispatchToDsh(project, 'plan')` 写 `kind: plan` 派单，插件开会话并给规划话术（四类判据 + 引用依据 + 不砍功能 + 只有用户能拍板）。所以"让骨架长出规划"不是隐式知识：**先让结构地图不是"待填"，规划才有东西可指**。dsh-fangcun 的结构地图仍待卡 `af3520b5` 批准并 `smap_apply`；用户 2026-11-18 已把"真跑 kind=plan"推迟，别催 | `contextPack.ts` ③ + 卡 `24ee1b42` |
 
 ## 3. 四条链路（改之前先看懂数据怎么走）
 
@@ -127,6 +132,14 @@ PID 不在就返回空串，挂件不显示「打开看板」——2026-11-07 �
 注入行还挂了全局 `error` 监听（语法错 / 404 / CSP / mount 抛异常都会报）。全部落
 `/fangcun/api/widget-report`，`health.widget.page.events` 留最近 12 条。桌面端
 `servedByPage` 只能证明"脚本被取走"，证明不了"它跑起来且还在页面上"。
+
+**设置页（0.7.0）**：`apply(root, config)` 把 Loader 行 config 归一成三项覆盖 →
+`resolveDataDir` / `resolvePipePath` / `resolveProjectScope` **优先读设置**，其次环境变量，最后自动探测。
+`client.js`（根目录，不是 `lib/`）用 `window.__ModuleLoader__.load` 注册 `settings.section`「方寸」，
+页面里 GET `/fangcun/api/settings` 读现状、PUT 保存；PUT 只收本机 + 同源，校验后走
+`configEditor.edit(entry, …)` 写 profile patch，保存后 Loader 重启本插件让新值生效。
+挂件开关/四角不经过宿主：写 `fc-todo-widget:*` → 调 `window.__fcTodoWidget.setHidden/setCorner/applySettings`。
+**没有 `Config` 导出**（零依赖，见事实 52）；`dsh.client` 清单变更要条目重启（事实 53）。
 
 **装机提示**：`lib/detect.js` 判"这台机器装没装方寸本体"，**只读文件**（data-dir.json / Electron userData /
 electron-updater 目录 / 开始菜单与桌面快捷方式 / Program Files 与 Programs 下的同名字目录），
@@ -239,12 +252,15 @@ electron-updater 目录 / 开始菜单与桌面快捷方式 / Program Files 与 
 | **规则段两条路径都写**（MCP 掉线时不变成死指令）+ 钉住「只到待验收」 | `prompt ①b①c` |
 | **防腐层边界**：DSH 概念只在 `index.js` / `compat.js`；业务模块零 DSH 依赖；零 dependencies | `layering ①–⑤`（做过反例验证） |
 | **看板链接只指向活着的进程**：`.tegula-port` 有 PID 且 PID 已退出 → 不给链接；旧格式只有端口 → 保留旧行为 | `plugin ⑩` |
+| **设置 > 环境变量 > 自动探测**；空字符串 = 清掉覆盖（不是设成空路径）；相对数据根 / 非 Windows 管道 / 未知键 / 非字符串一律拒；只收本机 + 同源；没有 `configEditor` 时明说不可写、不假装保存 | `settings ①–⑤` |
+| **client 半清单/模块格式**：`dsh.client.platform='web'` + `exports['./client']` + `files` 三处同步；`__ModuleLoader__.load({ id: 包名, factory })`；apply 注册 `settings.section`「方寸」；没有 slots 服务时安静退场 | `client ①–④` |
+| **挂件 API 立刻生效**：`setHidden` / `setCorner` / `applySettings` 改状态并落 `localStorage`；隐藏后仍留能捞回来的小点 | `widget-dom ⑲` |
 | health 只报能自证的事实、不泄凭据 | `plugin ⑤` |
 
 ## 5. 本地怎么跑
 
 ```powershell
-npm test        # 107 条，不需要 DSH、不需要真方寸（真起假管道）
+npm test        # 150 条，不需要 DSH、不需要真方寸（真起假管道）
 npm pack        # 验发布包；CI 会把 tgz 解出来真 apply 一次
 ```
 
@@ -301,6 +317,8 @@ curl.exe http://127.0.0.1:<端口>/fangcun/health.json   # 先看 version 是不
 
 环境变量：`FANGCUN_DATA_DIR`（数据根）、`FANGCUN_MCP_PIPE`（管道）、
 `FANGCUN_PROJECT`（提示词那行只统计某个项目）、`DSH_HOME`（默认 `~/.dsh`）。
+**这三项在 0.7.0 起都可被设置页覆盖**（设置 > 环境变量 > 自动探测）；设置页写的是 profile patch，
+不是插件自己的文件。
 
 ## 6. 发版
 
@@ -360,8 +378,9 @@ runner 是 **`windows-latest` + Git Bash**：插件只支持 Windows，`detect` 
    ⚠ **用户 2026-11-17 明确纠正过这条卡的前提**："桌面端挂件一直都在，都在了很多天了。哪有消失？"
    —— 那张卡后来还挂在"进行中"，标题本身在制造误判；真机 `health.widget.page` 2026-11-17 18:02 的证据是
    `mount` + `probe(in=1, hit=fc-todo-widget, tb=40)`，**没有 `removed`**。以后描述它要按证据说
-   （"可见/被原生按钮区盖住/被摘掉"三种），不要再用"消失"这个词。剩下真正没确认的只有自由摆放那一条：
-   **待真机确认**：解锁后拖到任意位置 → 松手就停在那、刷新还在、四角按钮仍能一键摆位。
+   （"可见/被原生按钮区盖住/被摘掉"三种），不要再用"消失"这个词。
+   **自由摆放**：用户 2026-11-18 20:23 已明确回复"A1 做过了"；卡 `fd243bb7` 已送 `待验收`，
+   不再把这条当作"没确认"往用户身上推（事实 43 的同类教训）。
 6. **REV-005 的三件事（2026-11-05）只在单测里绿过**：逐轮度量（`health.proof.turns`）、
    卡号追踪（`cards.lastCardId`、`usage` note 里的 `card=`）、挂件「在办 / 待拍板 / 本次在办」。
    真机要重启后按三个点复核；`proof.turns` 从这一版装上才开始积累，头一天数字小是正常的。
@@ -396,6 +415,24 @@ runner 是 **`windows-latest` + Git Bash**：插件只支持 Windows，`detect` 
    `dist/main/ipc.js` / `dist/preload/index.js` / `dist/renderer/assets/index-*.js` 都含
    `context:dispatchDsh` 与「派给 DSH」——"界面入口还没有"这个旧判断是错的，别再按它排期。
    **仍没验过的**：真人在方寸界面上点那个按钮（这条只是用等价文件模拟的）、以及 `kind: plan` 的规划派单。
+   `kind: plan` 已被用户 2026-11-18 主动推迟（"等方寸的能力全做完了能用了再说"），**别催**。
+
+13. ✅ **A2（HMR 后刷新页面能否恢复挂件）2026-11-18 已验**：HMR 后 counters 归零 → 在 DevTools 里
+   对 `dsh-app://app/` 执行 Ctrl+R → `servedByPage=1`、`page.events=boot/mount/probe`、
+   `probe.tb=40/hit=fc-pill`。**注意** `injected/pushed` 仍是 0（事实 54），那是桌面端窗口缓存，
+   不是失败；判据改成 page 事件。卡 `d462c0df` 可送 `待验收`。
+
+14. **设置页视觉确认还没做**：`client-apply` / `client-section` 两行已经在真机页面里出现（事实 55），
+   说明 client 半加载且注册成功；但**用户还没打开设置面板看那一节**。打开后如果「方寸」一节
+   不出现、或保存报错，按 `health.settings.writable` / `error` 和 `health.client.available` 分诊。
+   这一条不要自己宣布"已验收"。
+
+15. **P2「先查后改率 30%」的口径不对，不是规则失效**（2026-11-18 复核）：
+   `turns.jsonl` 里 210 个改文件轮次中，`readBeforeEdit=62`（29.5%）；但拆开看：
+   `anyRead=95`（45%）、`after=33`（先改后查，通常是回写）、`none=115`（54.8%）、
+   **首个工具就是编辑工具的只有 16 个（7.6%）**。115 个"没查"里绝大多数是**续作轮次**：
+   会话前一轮已经查过方寸，这一轮直接改；规则是"开工第一件事"，不是"每一轮改文件前都要查"。
+   所以可行动的指标是 **首个工具是编辑的轮次（16）**，不是 30%。要改就改度量，别再拿 30% 当病。
 
 ## 9. 文档地图
 

@@ -1,6 +1,6 @@
 {
   "name": "dsh-fangcun",
-  "version": "0.6.7",
+  "version": "0.7.0",
   "description": "方寸（tegula）任务看板 × DSH：在 DSH 里看方寸待办、把本会话 token 用量报回方寸账本。只走方寸的 MCP 接口，不 import 方寸代码。",
   "keywords": [
     "dsh",
@@ -14,6 +14,7 @@
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
+    "./client": "./client.js",
     "./package.json": "./package.json",
     "./locale/*.json": "./locale/*.json",
     "./icon": "./icon.svg"
@@ -21,6 +22,7 @@
   "icon": "./icon.svg",
   "files": [
     "lib",
+    "client.js",
     "cordis.patch.yml",
     "README.md",
     "CHANGELOG.md",
@@ -44,6 +46,9 @@
     "bundle": {
       "patch": "./cordis.patch.yml"
     },
+    "client": {
+      "platform": "web"
+    },
     "compatibility": {
       "dsh": ">=0.2.1-rc.2",
       "dshReleases": {
@@ -54,7 +59,7 @@
     }
   },
   "scripts": {
-    "test": "node --test test/plugin.test.mjs test/usage.test.mjs test/widget.test.mjs test/widget-dom.test.mjs test/prompt.test.mjs test/detect.test.mjs test/cards.test.mjs test/tool.test.mjs test/compat.test.mjs test/layering.test.mjs test/link.test.mjs test/dispatch.test.mjs"
+    "test": "node --test test/plugin.test.mjs test/usage.test.mjs test/widget.test.mjs test/widget-dom.test.mjs test/prompt.test.mjs test/detect.test.mjs test/cards.test.mjs test/tool.test.mjs test/compat.test.mjs test/layering.test.mjs test/link.test.mjs test/dispatch.test.mjs test/settings.test.mjs test/client.test.mjs"
   },
   "author": "MUYU46548",
   "license": "MIT",

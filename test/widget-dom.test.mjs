@@ -651,3 +651,32 @@ test('⑱b 没有 focus、计数为 0 时不显示尾巴，也不编造"本次�
   assert.doesNotMatch(w.root().text(), /本次在办/, '没有 focus 就不出这一行')
   assert.match(w.root().text(), /全部项目 · 未完成 3/)
 })
+
+/** ⑲ 设置页 API：设置页改 localStorage 后调它，挂件立刻重放，不用刷新页面 */
+test('⑲ 设置页 API：setHidden / setCorner / applySettings 立刻生效并落盘', async () => {
+  const dom = makeDom()
+  const w = runWidget(dom, { reply: TASKS })
+  await w.flush()
+  const api = dom.window.__fcTodoWidget
+  assert.ok(api, '必须暴露 __fcTodoWidget 给设置页')
+
+  const snap = api.snapshot()
+  assert.equal(snap.hidden, false)
+  assert.equal(snap.corner, 'tr')
+
+  api.setHidden(true)
+  assert.equal(dom.storage.get('fc-todo-widget:hidden'), '1')
+  assert.match(w.root().className, /fc-hidden/, '隐藏后根节点要进折叠态（留小点能捞回来）')
+  api.setHidden(false)
+  assert.equal(dom.storage.get('fc-todo-widget:hidden'), '0')
+
+  api.setCorner('bl')
+  assert.equal(dom.storage.get('fc-todo-widget:corner'), 'bl')
+  assert.equal(w.root().getAttribute('data-corner'), 'bl')
+
+  // 设置页直接写 localStorage（例如一次改多项）→ applySettings 必须按新值重放
+  dom.storage.set('fc-todo-widget:corner', 'tl')
+  dom.storage.delete('fc-todo-widget:pos')
+  api.applySettings()
+  assert.equal(w.root().getAttribute('data-corner'), 'tl')
+})
