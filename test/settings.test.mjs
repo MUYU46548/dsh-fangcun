@@ -13,7 +13,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import * as mod from '../lib/index.js'
-import { mergeSettings, normalizeSettings, validateSettingsPatch } from '../lib/settings.js'
+import { dispatchLimitsOf, mergeSettings, normalizeSettings, validateSettingsPatch } from '../lib/settings.js'
 
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-fangcun-settings-home-'))
 process.env.DSH_HOME = HOME
@@ -97,13 +97,28 @@ test('① 校验：只收认识的键、字符串、绝对数据根、Windows �
   assert.equal(validateSettingsPatch({ pipePath: '/tmp/x.sock' }, { platform: 'darwin' }).ok, true)
   assert.equal(validateSettingsPatch({ project: 'a\nb' }).ok, false)
   assert.equal(validateSettingsPatch({}).ok, false)
+  // 2026-11-20：派单限流是数字（0 = 不限），脏值不许写
+  assert.equal(validateSettingsPatch({ dispatchDailyCap: '20' }).ok, true)
+  assert.equal(validateSettingsPatch({ dispatchDailyCap: '0' }).ok, true)
+  assert.equal(validateSettingsPatch({ dispatchDailyCap: '1001' }).ok, false)
+  assert.equal(validateSettingsPatch({ dispatchCooldownMin: '2' }).ok, true)
+  assert.equal(validateSettingsPatch({ dispatchCooldownMin: 'abc' }).ok, false)
+  assert.equal(validateSettingsPatch({ dispatchCooldownMin: '-1' }).ok, false)
+  // 设置真的进限流：默认 20/2；0 = 不限
+  assert.deepEqual(dispatchLimitsOf({}), { dailyCap: 20, cooldownMin: 2, cooldownMs: 120000 })
+  assert.deepEqual(
+    dispatchLimitsOf({ dispatchDailyCap: '5', dispatchCooldownMin: '0' }),
+    { dailyCap: 5, cooldownMin: 0, cooldownMs: 0 },
+  )
 })
 
 test('② 归一 / 合并：空值删掉覆盖，不把"没设置"变成显式空值', () => {
   assert.deepEqual(normalizeSettings({ dataDir: ' C:\\a ', weird: 1 }), {
-    dataDir: 'C:\\a', pipePath: '', project: '',
+    dataDir: 'C:\\a', pipePath: '', project: '', dispatchDailyCap: '', dispatchCooldownMin: '',
   })
-  assert.deepEqual(normalizeSettings(null), { dataDir: '', pipePath: '', project: '' })
+  assert.deepEqual(normalizeSettings(null), {
+    dataDir: '', pipePath: '', project: '', dispatchDailyCap: '', dispatchCooldownMin: '',
+  })
   assert.deepEqual(
     mergeSettings({ dataDir: 'C:\\a', pipePath: '\\\\.\\pipe\\x', legacy: 1 }, { dataDir: '', project: 'p' }),
     { pipePath: '\\\\.\\pipe\\x', legacy: 1, project: 'p' },
@@ -132,6 +147,8 @@ test('③ 优先级：设置 > 环境变量 > 自动探测', () => {
       dataDir: dir,
       pipePath: '\\\\.\\pipe\\dsh-fangcun-config-test',
       project: 'cfg-project',
+      dispatchDailyCap: '',
+      dispatchCooldownMin: '',
     })
     assert.equal(health.settings.overridden.dataDir, true)
   } finally {
@@ -188,7 +205,9 @@ test('④ 设置路由：GET 说清能不能写；PUT 只收本机同源，脏�
   const cleared = await call(route, putReq({ dataDir: '', pipePath: '', project: '' }))
   assert.equal(cleared.status, 200)
   assert.deepEqual(saved, { legacy: 1 }, '空字符串必须删键，不是写成空覆盖')
-  assert.deepEqual(cleared.json.values, { dataDir: '', pipePath: '', project: '' })
+  assert.deepEqual(cleared.json.values, {
+    dataDir: '', pipePath: '', project: '', dispatchDailyCap: '', dispatchCooldownMin: '',
+  })
 
   // 2026-11-19 真机：三项都空时点「保存」，profile 被重写了一遍、UI 却说"会重启一次"，
   // 用户原话"感觉没什么用"。没有变化就该直接说没有变化，且不碰 profile。

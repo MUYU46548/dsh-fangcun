@@ -310,22 +310,24 @@ test('⑯ parseDispatch 带出 source/nonce/sig（老派单缺省为空）', () 
   assert.equal(old.sig, '')
 })
 
-test('⑰ 冷却 / 日上限：只数真实开过的会话，被拒文件不占额度', () => {
+test('⑰ 冷却 / 日上限：默认 20 次/天 + 2 分钟；0 = 不限；被拒文件不占额度', () => {
   const now = Date.parse('2026-11-20T12:00:00.000Z')
   assert.equal(checkDispatchLimits([], now).ok, true)
   const recent = { ok: true, at: new Date(now - 60_000).toISOString() }
   const cool = checkDispatchLimits([recent], now)
   assert.equal(cool.ok, false)
   assert.equal(cool.reason, 'cooldown')
-  assert.ok(cool.leftMs > 0 && cool.leftMs <= 10 * 60 * 1000)
-  // 11 分钟前 → 冷却过了；日上限 2 条今天已用 2 条 → 拒
+  assert.ok(cool.leftMs > 0 && cool.leftMs <= 2 * 60 * 1000)
+  // 11 分钟前 → 默认 2 分钟冷却早过了
   const old = { ok: true, at: new Date(now - 11 * 60_000).toISOString() }
   assert.equal(checkDispatchLimits([old], now).ok, true)
   const todayA = { ok: true, at: new Date(now - 30 * 60_000).toISOString() }
   const todayB = { ok: true, at: new Date(now - 20 * 60_000).toISOString() }
-  const cap = checkDispatchLimits([todayA, todayB], now)
+  const cap = checkDispatchLimits([todayA, todayB], now, { dailyCap: 2, cooldownMs: 0 })
   assert.equal(cap.ok, false)
   assert.equal(cap.reason, 'daily-cap')
+  // 0 = 不限：同一天很多条也不拒
+  assert.equal(checkDispatchLimits([todayA, todayB], now, { dailyCap: 0, cooldownMs: 0 }).ok, true)
   // 被拒的行（ok:false）不占额度
   const rejects = [{ ok: false, at: new Date(now).toISOString() }, { ok: false, at: new Date(now).toISOString() }]
   assert.equal(checkDispatchLimits(rejects, now).ok, true)
