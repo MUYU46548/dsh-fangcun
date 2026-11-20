@@ -60,7 +60,7 @@ assert.deepEqual(
 assert.deepEqual(
   toolDefs.map((d) => d.name).sort(),
   [
-    'fangcun_card', 'fangcun_context', 'fangcun_log', 'fangcun_log_write',
+    'fangcun_card', 'fangcun_context', 'fangcun_log',
     'fangcun_logs', 'fangcun_search', 'fangcun_tasks', 'fangcun_write',
   ],
   '发布包里的模型工具必须齐全',

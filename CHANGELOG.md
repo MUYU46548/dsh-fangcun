@@ -1,21 +1,45 @@
 # 变更记录
 
-## 0.7.1（2026-11-19）· `fangcun_context` 带记忆层简报：开工前看见踩过的坑
+## 0.7.3（2026-11-20）· 派单签名 + 可调限流
+
+- **只消费方寸 GUI 签名的派单**：`source=gui` + `nonce` + HMAC；未签名/篡改 → `rejected/` + 审计，
+  不再见文件就开会话。
+- **默认限流**：同一时间 10 个、冷却 0、每日不限（0 = 不限）；DSH 设置页「派单限流」可调。
+- **审计**：`.dispatch-dsh/audit.jsonl` 记 source(gui/agent)/kind/project/sessionId/at/reason；
+  health 暴露 `lastReject/todayCount/dailyCap/cooldownMs/concurrency/secretFound`。
+- **签名密钥**：`%APPDATA%/方寸/dispatch-secret`（userData，不在数据根）；插件找不到就拒绝，不退回无签名直开。
+- 保留 0.7.2 的记忆开关 / 核心预算行为；MCP 工具与路由不变。
+
+## 0.7.2（2026-11-20）· 记忆开关 + 核心预算 2000→800
+
+方寸 v2 把记忆改成 `claim + evidence` 两层，并加了默认开启的记忆开关。插件这一版只跟着改两处：
+
+- **认 `memory_core.enabled`**：方寸关掉记忆时，`fangcun_context` 说
+  「记忆核心（已关闭）—— 在方寸 → 设置 → 通用 → 记忆 里开启」；
+  **不再**把「关掉」渲染成「core.md 还没写」。
+- **核心预算 2000→800**：方寸 v2 的 `core.md` 由钉住的 claim 生成（≤800 字），
+  插件 schema / 渲染 / 测试同步。
+- `shapeContext` 新增 `memoryEnabled`；`output.schema.required` 同步；
+  `tool ⑦/⑦b/⑦d` 覆盖开 / 拉失败 / 关三种状态。
+
+## 0.7.1（2026-11-19）· `fangcun_context` 注入固定记忆核心（不是动态 top-N）
 
 用户 2026-11-17：「方寸要管记忆，**当 DSH 的记忆层**」「你做之前真的有看过其他家的记忆是怎么实现的吗？」
+用户 2026-11-19 追问：「后期等几十万字每次注入上下文？记忆做的时候就没规划好。」
 
-### 一、context 第五处：`memory_briefing`
+### 一、context 第五处：`memory_core`（固定核心，≤2000 字）
 
-`fangcun_context` 原来并行拉四处（章程 / 决策 / 未结卡 / 最新日志）。现在加第五处
-`memory_briefing`：**这个项目 + 跨项目**的有效事故/教训/纪律，按影响再按时间排序，
-默认 5 条；只给 id / 类型 / 影响 / 标题 / 指针，正文仍用 `memory_read` 取。
+`fangcun_context` 原来并行拉四处（章程 / 决策 / 未结卡 / 最新日志）。第五处只拉
+**固定核心** `memory/core.md`：人工维护、硬上限 2000 字、只放编号与一句话；
+归档（事故/教训全文）**不自动注入**，只报「另有 N 条」，要细节模型自己
+`memory_search` / `memory_read`。
 
-- 为什么是"开工前自动出现"而不是"让模型自己去搜"：Claude memory tool 是开始任务前检查
-  `/memories`，Basic Memory 是 session-start briefing，Letta 是核心记忆常驻 —— 同一个动作。
-- **有界**：最多 5 条；超了明说"共 N 条，只列前 5 条"。
-- **拉失败 ≠ 没有记忆**：老版方寸没有 `memory_briefing` 时，`memoriesUnavailable=true`，
-  渲染成「没拉到记忆，这不等于没踩过坑」，不许说成"这个项目很干净"。
-- 待审批 / 已撤销不进简报（它们不算数）。
+- 抄的是 **Letta core memory**（核心块小、常驻、字符受限、少而精）+ **Claude memory tool** 的
+  just-in-time（完整归档按需取）；不再把动态 top-5 当"核心"塞进每次开工。
+- **拉失败 ≠ 没有记忆**：老版方寸没有 `memory_core` 时，`memoryUnavailable=true`，
+  渲染成「没拉到记忆核心，这不等于没踩过坑」，不许说成"这个项目很干净"。
+- 待审批 / 已撤销不进核心（它们不算数）。
+- `memory_briefing` 保留为**按需检索**工具，不再由 context 自动调用。
 
 ### 二、逐轮度量补 `editFirst`（与记忆层同一版发出）
 
@@ -26,16 +50,17 @@
 
 ### 三、验证
 
-- `npm test`：**152/152**（`tool ⑦` 并行名单五处 + 简报渲染 / `memoriesUnavailable`；`cards ③f`）；
+- `npm test`：**152/152**（`tool ⑦` 并行名单五处 + 固定核心渲染 / `memoryUnavailable`；`cards ③f`）；
 - 真机（DSH 2026-11-19 重启后 0.7.1）：`health.proof.turns.editFirst=18`；
-- 桌面端 `e2e-memory`：**65/0**（方寸侧跑的，`memory_briefing` 的排序 / 排除 / 有界 / 待审批不可见）。
+- 桌面端 `e2e-memory`：**76/0**（固定核心 ≤2000 字、core.md 不进归档、检索默认 20 条、
+  简报 5 条、摘要跳过标题、memory_read 截断、待审批/驳回）。
 
 ### 四、review 时修的两处口径
 
-1. `memory_briefing` 是**分页**的（`limit` 只截这一页，回 `total / returned / truncated`）。
-   初版按 `memories.length` 算"共几条"——真机上这个项目有 11 条、请求 5 条，
-   会写成"共 5 条"，把"还有 6 条没给你看"静默吞掉。现在截断口径改用方寸回的
-   `total` / `truncated`，`tool ⑦` 用 `total:6 / returned:2` 钉住。
+1. **初版把动态 `memory_briefing` top-5 当"核心"自动注入**——用户指出"后期几十万字
+   每次注入？没规划好"。已改成固定 `memory/core.md`（≤2000 字）+ 归档按需，
+   动态 top-5 只保留为检索工具，不再自动注入。`tool ⑦` 钉住"core 有 chars/budget，
+   归档只报数、标题不进 context"。
 2. **设置页「保存」没有变化却谎报重启**（用户 2026-11-19 点完保存原话"感觉没什么用"）：
    三项都空时 PUT 仍把 profile 重写一遍（内容不变），回包却写 `restarting:true` +
    "插件会重启一次"。现在先比对归一后的配置：**没变化就不碰 profile、不重启**，

@@ -96,7 +96,8 @@
 | 54 | ⚠ **桌面端刷新页面 ≠ 重新收集注入表**：HMR 之后 `widget.injected/pushed` 会一直停在 0，即使页面刷新、挂件已经恢复（2026-11-18 真机：刷新后 `servedByPage=1`、`page.events=boot/mount/probe`、`probe.tb=40/hit=fc-pill`，`injected/pushed` 仍 0）。原因是桌面主进程按**窗口**缓存了 boot 表；`collectIndexInjections()` 的"每次新发一张表"只在宿主侧成立，页面刷新走的是窗口缓存。**判挂件恢复看 `page.events` + `servedByPage`，不看 `injected/pushed`**；后者只在新建窗口/宿主启动时可靠 | 2026-11-18 真机：DevTools 里 Ctrl+R 后 page 事件恢复而 injected/pushed=0 |
 | 55 | ✅ **设置页自证**：client 模块 `apply` 时向 `/fangcun/api/widget-report` 发 `client-apply`，`settings.section` 注册成功后再发 `client-section`；`health.widget.page.events` 里能看到这两行，证明"客户端半真的在页面里跑、且注册成功"，不靠人眼。事件名带 `client-` 前缀，与挂件的 `boot/mount/probe` 共用同一只读信标 | `client ③` + 2026-11-18 真机（`client-apply` / `client-section` 各出现两次） |
 | 56 | **规划从骨架长出来**：方寸 `contextPack.ts` 第 3 节已经把 `### 结构地图` 放进上下文包；`dispatchToDsh(project, 'plan')` 写 `kind: plan` 派单，插件开会话并给规划话术（四类判据 + 引用依据 + 不砍功能 + 只有用户能拍板）。所以"让骨架长出规划"不是隐式知识：**先让结构地图不是"待填"，规划才有东西可指**。dsh-fangcun 的结构地图仍待卡 `af3520b5` 批准并 `smap_apply`；用户 2026-11-18 已把"真跑 kind=plan"推迟，别催 | `contextPack.ts` ③ + 卡 `24ee1b42` |
-| 57 | ⚠ **`memory_briefing` 是分页的**：`limit` 只截这一页，回 `total / returned / truncated`。截断口径必须用方寸的 `total`，照 `items.length` 算会把"11 条只给 5 条"写成"共 5 条"，**静默吞掉"还有 6 条"**（2026-11-19 review 时真机踩到）。`memoriesUnavailable` 只表示**没拉到**，不许渲染成"这个项目没有记忆" | `tool ⑦`（`total:6 / returned:2 / truncated:true`）+ 2026-11-19 真机 `memory_briefing`（total 11 / returned 5） |
+| 57 | ⚠ **记忆只注入固定核心，不注入归档**：`memory_core` 只回 `memory/core.md`（方寸 v2 由钉住 claim 生成、硬上限 800 字）；归档**只报条数**，标题/摘要不进 context。`memoryEnabled=false` 时渲染「记忆核心（已关闭）」，**不许**说成"core.md 没写"；`memoryUnavailable` 只表示**没拉到核心**，不许渲染成"这个项目没有记忆"。`memory_search` 是按需检索（默认 10 条 claim），`memory_read` 默认 8k 字上限；**不要把动态 top-N 当核心**（用户 2026-11-19：「后期几十万字每次注入？」） | `tool ⑦/⑦d`（核心/开关/拉失败 + 归档标题不进 context）+ `e2e-memory` 78/0 |
+| 57b | ⚠ **日志写口对 agent 关闭（2026-11-19 暮雨拍板）**：原话「AI 自动写日志我记得已经禁了……日志本来就是用户自己存上下文的地方，AI 自己写让人搞不懂哪些没做」。查实三处漏：①`create_log` 的 `userAsked` 是**模型自己填的**，闸只证明"模型说用户同意"；②方寸 `update_log` 当时**没有任何闸**（`6dzpgc` 就是被它从 3.6K 改成 17K）；③`4pxuly` 连 `create_log` 审计都没有（CLI 旁路）。现在插件侧 `fangcun_log_write` 整件移除，方寸 MCP 侧 `create_log`/`update_log`/`set_log_status`/`attach_log_files` 四个工具移除，CLI `tegula log` 写动作一律拒绝；**日志只读，写入只在方寸界面**。别再以"用户明确要求"为由加回来 —— 收工回写走 `fangcun_write` 改卡 + 移「待验收」 | 2026-11-19 用户原话 + `.mcp-writes.jsonl` + 会话 `c1132148` seq 3013/3040 |
 
 ## 3. 四条链路（改之前先看懂数据怎么走）
 
@@ -155,33 +156,37 @@ electron-updater 目录 / 开始菜单与桌面快捷方式 / Program Files 与 
 `context()` 放**一行现状**（`lib/status.js` 的内存快照，60 秒后台刷新；provider **绝不碰管道**）。
 
 **模型工具**（REV-014 ②，0.4.0 起；`fangcun_context` 0.5.0 起；日志三件套 0.6.6；
-`fangcun_search` 0.6.7；context 带记忆简报 0.7.1）：`apply()` 里 `root.get('tools')`（同样是 `get` 不是 `inject`，理由见事实 11）
-→ `register()` **八个**定义（`lib/tool.js`）→ 模型调到就开一条管道连接、用完即关。
+`fangcun_search` 0.6.7；context 带固定记忆核心 0.7.2）：`apply()` 里 `root.get('tools')`（同样是 `get` 不是 `inject`，理由见事实 11）
+→ `register()` **七个**定义（`lib/tool.js`）→ 模型调到就开一条管道连接、用完即关。
+（2026-11-19 起 `fangcun_log_write` 已移除 —— 日志写口对 agent 关闭，见事实 57b。）
 
 | 工具 | 转发 | 说明 |
 |---|---|---|
-| `fangcun_context` | `project_charter` + `decision_list` + `list_tasks` + `list_logs` + `memory_briefing`（**并行**）+ 最新一条 `get_log`（补下一步） | 开工一屏：章程四节 + 决策 + 未结卡 + **踩过的坑 / 纪律（记忆层）** + **上次做到哪**。MCP 那条路要六跳才凑齐 |
+| `fangcun_context` | `project_charter` + `decision_list` + `list_tasks` + `list_logs` + `memory_core`（**并行**）+ 最新一条 `get_log`（补下一步） | 开工一屏：章程四节 + 决策 + 未结卡 + **固定记忆核心（≤800 字；归档只报数；可关）** + **上次做到哪**。MCP 那条路要六跳才凑齐 |
 | `fangcun_tasks` | `list_tasks` | 列未结卡（只读，某项目 + 未结） |
 | `fangcun_search` | `search_tasks` | 关键词搜**全部项目、全部状态**（含已完成/驳回）—— 事实 49 |
 | `fangcun_card` | `get_task` | 读一张卡正文（只读） |
 | `fangcun_write` | `create_task` / `update_task` / `move_status`（按 `action`） | 卡的唯一写口 |
 | `fangcun_logs` | `list_logs` | 列执行日志（只读） |
 | `fangcun_log` | `get_log` | 读一条日志正文 + **接力链上下游**（只读） |
-| `fangcun_log_write` | `create_log` / `update_log` / `set_log_status`（按 `action`） | 日志的唯一写口 —— 事实 50 |
 
 `delete_task` **永不做**（`NEVER_ROUTED` + `tool ⑨b` 钉着）—— 事实 51。
+
+**日志没有任何 agent 写口**（2026-11-19，事实 57b）：新建 / 编辑 / 状态 / 挂附件 / 删除 / 归档
+全部只在方寸界面做；插件只有 `fangcun_logs` / `fangcun_log` 两个读工具。
 
 `fangcun_context` 的四条铁律（`tool ⑦/⑦b/⑦c` 钉着）：
 ①**缺节要说「真没写」**，不许替项目编目标；②五处**并行**拉，**有一处通就算连上**（只缺一处单独标）；
 ③缺 `project` 就抛，不许默认成"全部项目"去猜；
-④**记忆拉失败 ≠ 没有记忆**：`memoriesUnavailable=true` 时渲染成「没拉到，这不等于没踩过坑」，
-不许说成"这个项目很干净"。
+④**记忆拉失败 ≠ 没有记忆**：`memoryUnavailable=true` 时渲染成「没拉到核心，这不等于没踩过坑」，
+不许说成"这个项目很干净"；且只注入固定 `memory/core.md`（≤800 字），归档只报条数，不塞标题/摘要。
+`memoryEnabled=false`（方寸设置里关了）时渲染「记忆核心（已关闭）」，也不许说成"没写"。
 「上次做到哪」只取**最新一条**日志的标题 + 下一步（`MAX_LOG_BLURB` 600 字）：正文不塞 ——
 那可能是几万字，而且它不是任务卡（渲染里明写这句，否则模型会照着抄）。
 
 **只白名单转发**，不做任意工具名转发。
 工具名是 `fangcun_*` 而**不是** `mcp__fangcun__*`：后者属于方寸 MCP 客户端，它断开时（卡 140864fa）
-那批工具全会消失，而**这八个**走插件自己的管道，仍然可用。
+那批工具全会消失，而**这七个**走插件自己的管道，仍然可用。
 输出一律**有界**（列表 30 条、正文 4000 字、决策 8 条、卡 12 张）并在超限时明说 —— 上下文是共用资源。
 注册状态进 `health.tools = { registered, names, error }`。
 

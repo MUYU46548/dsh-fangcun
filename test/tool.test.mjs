@@ -13,8 +13,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import {
   buildTools, makePipeCallTool, shapeTasks, shapeCard, shapeLogs, shapeLog, shapeSearch,
-  writeCallOf, logWriteCallOf, TOOL_ROUTES, WRITE_ACTIONS, SIGNOFF_STATUSES, NEVER_ROUTED,
-  LOG_WRITE_ACTIONS, LOG_RUNNING_STATES,
+  writeCallOf, TOOL_ROUTES, WRITE_ACTIONS, SIGNOFF_STATUSES, NEVER_ROUTED,
 } from '../lib/tool.js'
 
 /** 假管道：按工具名回预设结果，并记录调用 */
@@ -39,10 +38,10 @@ const byName = (tools) => Object.fromEntries(tools.map((t) => [t.name, t]))
 test('① 造出三个真工具，定义字段齐全', () => {
   const { deps } = fakeDeps()
   const tools = buildTools(deps)
-  assert.equal(tools.length, 8)
+  assert.equal(tools.length, 7)
   const t = byName(tools)
   assert.deepEqual(Object.keys(t).sort(), [
-    'fangcun_card', 'fangcun_context', 'fangcun_log', 'fangcun_log_write',
+    'fangcun_card', 'fangcun_context', 'fangcun_log',
     'fangcun_logs', 'fangcun_search', 'fangcun_tasks', 'fangcun_write',
   ])
 
@@ -68,9 +67,9 @@ test('② 只白名单转发：读只碰 list_tasks / get_task / list_logs / get
   assert.equal(TOOL_ROUTES.fangcun_logs, 'list_logs')
   assert.equal(TOOL_ROUTES.fangcun_log, 'get_log')
   assert.equal(TOOL_ROUTES.fangcun_write, null)
-  assert.equal(TOOL_ROUTES.fangcun_log_write, null)
+  // 2026-11-19：日志写口对 agent 关闭 —— 路由表里不该再有它
+  assert.equal('fangcun_log_write' in TOOL_ROUTES, false)
   assert.deepEqual(Object.keys(WRITE_ACTIONS).sort(), ['create', 'move', 'update'])
-  assert.deepEqual(Object.keys(LOG_WRITE_ACTIONS).sort(), ['create', 'status', 'update'])
 
   const { calls, deps } = fakeDeps({
     list_tasks: [], get_task: { id: 'c1', title: 't' }, list_logs: [], get_log: { id: 'l1', title: 't' },
@@ -97,8 +96,8 @@ test('② 只白名单转发：读只碰 list_tasks / get_task / list_logs / get
   // 不允许调用任意工具名（提权）：action 不在白名单就是抛
   await assert.rejects(() => t.fangcun_write.execute({ action: 'delete_task', id: 'c1' }))
   await assert.rejects(() => t.fangcun_write.execute({ action: 'get_data_dir' }))
-  await assert.rejects(() => t.fangcun_log_write.execute({ action: 'delete_task', id: 'l1' }))
-  await assert.rejects(() => t.fangcun_log_write.execute({ action: 'inject_logs', id: 'l1' }))
+  // 日志写工具已不在工具面（2026-11-19）—— 模型连"调用它"的机会都不该有
+  assert.equal(t.fangcun_log_write, undefined)
 })
 
 test('③ writeCallOf：参数不全就抛，绝不猜；只放模型真给了的字段', () => {
@@ -297,18 +296,17 @@ test('⑦ fangcun_context：一屏说完「项目要变成什么 + 定过什么 
     ],
     // 只有最新那条会被 get_log 补下一步
     get_log: { id: 'log_1', nextSteps: '先把路网画出来，再对一次坐标。' },
-    // 2026-11-19：记忆层进 context —— 事故/纪律的指针，不塞正文
-    // total=6 / returned=2：真机 `memory_briefing` 是**分页**的（limit 只截这一页），
-    // 截断口径要用方寸回的 total，不许拿 items.length 冒充全量。
-    memory_briefing: {
-      project: 'sitian',
-      total: 6,
-      returned: 2,
-      truncated: true,
-      items: [
-        { id: 'inc-1', type: '事故', impact: '严重', project: 'sitian', title: '底图坐标错位', summary: '', file: 'memory/incidents/x.md' },
-        { id: 'lesson-1', type: '纪律', impact: '高', project: '跨项目', title: '先锁范围', summary: '', file: 'memory/lessons/y.md' },
-      ],
+    // 2026-11-20：context 只注入**固定核心**（≤800 字），不注入归档列表。
+    // 抄 Letta core memory + Claude just-in-time：归档条数只报数，不塞标题/摘要。
+    memory_core: {
+      text: '# 记忆核心\n\n- D1 征询≠授权（lesson-20261117-01）\n- D3 正式写入先过清单闸门（lesson-20261117-01）',
+      chars: 55,
+      budget: 800,
+      archived: 6,
+      truncated: false,
+      missing: false,
+      enabled: true,
+      updatedAt: '2026-11-19T12:10:00+08:00',
     },
   })
   const t = byName(buildTools(deps))
@@ -328,19 +326,18 @@ test('⑦ fangcun_context：一屏说完「项目要变成什么 + 定过什么 
   assert.equal(r.lastLog.id, 'log_1')
   assert.equal(r.lastLog.nextSteps, '先把路网画出来，再对一次坐标。')
   assert.equal(r.logsTotal, 2)
-  // 记忆层：有指针、有影响、有 id；不是空数组也不是正文
-  assert.equal(r.memories.length, 2)
-  assert.equal(r.memories[0].id, 'inc-1')
-  assert.equal(r.memories[0].impact, '严重')
-  assert.equal(r.memories[1].project, '跨项目')
-  assert.equal(r.memoriesUnavailable, false)
-  // 截断必须按方寸回的 total 说（真机 11 条只给 5 条，照 items.length 会写成"共 5 条"）
-  assert.equal(r.memoriesTotal, 6, 'total 是全量口径，不是这一页的条数')
-  assert.equal(r.memoriesTruncated, true, '还有 4 条没给 → 必须明说')
+  // 记忆层：只注入固定核心（有字符预算），归档只报数，不塞标题/摘要
+  assert.match(r.memoryCore, /D1 征询≠授权/)
+  assert.equal(r.memoryChars, 55)
+  assert.equal(r.memoryBudget, 800)
+  assert.equal(r.memoryArchived, 6)
+  assert.equal(r.memoryTruncated, false)
+  assert.equal(r.memoryEnabled, true)
+  assert.equal(r.memoryUnavailable, false)
 
   // 五处是并行拉的（不串行）；get_log 只补最新那一条
   const parallel = calls.filter((c) => c.name !== 'get_log').map((c) => c.name).sort()
-  assert.deepEqual(parallel, ['decision_list', 'list_logs', 'list_tasks', 'memory_briefing', 'project_charter'])
+  assert.deepEqual(parallel, ['decision_list', 'list_logs', 'list_tasks', 'memory_core', 'project_charter'])
   const getLogs = calls.filter((c) => c.name === 'get_log')
   assert.equal(getLogs.length, 1, '只为最新一条日志补下一步，不是整页拉')
 
@@ -351,11 +348,12 @@ test('⑦ fangcun_context：一屏说完「项目要变成什么 + 定过什么 
   assert.match(text, /场景/)
   assert.match(text, /上次做到哪/)
   assert.match(text, /先把路网画出来/)
-  // 记忆层要真的出现在一屏里，否则"存了但不用"还是没解决问题
-  assert.match(text, /记忆层/)
-  assert.match(text, /底图坐标错位/)
-  assert.match(text, /先锁范围/)
-  assert.match(text, /共 6 条，只列前 2 条/, '截断要在这一屏里说出来，别静默少给')
+  // 记忆核心要真的出现在一屏里；归档只报数，不把标题/摘要塞进来
+  assert.match(text, /记忆核心/)
+  assert.match(text, /D1 征询≠授权/)
+  assert.match(text, /6 条归档记忆/)
+  assert.match(text, /不自动注入/)
+  assert.doesNotMatch(text, /底图坐标错位/, '归档标题不该被自动注入')
 })
 
 test('⑦b 五处都没拉到才算「没连上」；只缺一处仍算连上', async () => {
@@ -384,14 +382,30 @@ test('⑦b 五处都没拉到才算「没连上」；只缺一处仍算连上', 
   assert.equal(r.lastLog.id, '', '没有日志时 lastLog 必须是空壳，不许编一条')
   assert.equal(r.logsTotal, 0)
   // 记忆拉失败 ≠ 没有记忆：这格必须单独标出来
-  assert.deepEqual(r.memories, [])
-  assert.equal(r.memoriesUnavailable, true, '记忆读口失败要单独说，不许说成"这个项目没踩过坑"')
+  assert.equal(r.memoryCore, '')
+  assert.equal(r.memoryUnavailable, true, '记忆读口失败要单独说，不许说成"这个项目没踩过坑"')
 })
 
 test('⑦c 缺 project 就抛（不许默认成"全部项目"去猜）', async () => {
   const { deps } = fakeDeps()
   const t = byName(buildTools(deps))
   await assert.rejects(() => t.fangcun_context.execute({}), /project/)
+})
+
+test('⑦d 记忆开关关闭：说已关闭，不说 core.md 没写', async () => {
+  const { deps } = fakeDeps({
+    memory_core: {
+      enabled: false, text: '（记忆开关已关闭）', chars: 0, budget: 800,
+      archived: 6, truncated: false, missing: false,
+    },
+  })
+  const t = byName(buildTools(deps))
+  const r = await t.fangcun_context.execute({ project: 'x' })
+  assert.equal(r.memoryEnabled, false)
+  const text = t.fangcun_context.output.render({}, r)[0].text
+  assert.match(text, /记忆核心（已关闭）/)
+  assert.match(text, /设置/)
+  assert.doesNotMatch(text, /还没写|core\.md/)
 })
 
 // ── ⑧ 执行日志三件套（2026-11-17 补）──────────────────────────────────
@@ -447,45 +461,22 @@ test('⑧b fangcun_log：正文封顶；**日志号不存在时不许回 ok:true
   }
 })
 
-test('⑧c 日志写口三道硬约束（都来自方寸原文，不是我自己加的）', () => {
-  // ① create 必须 userAsked=true —— 日志是用户的私人笔记本，不是 agent 汇报的垃圾桶
-  assert.throws(() => logWriteCallOf({ action: 'create', title: 'x' }), /userAsked/)
-  assert.throws(() => logWriteCallOf({ action: 'create', title: 'x', userAsked: false }), /userAsked/)
-  assert.throws(() => logWriteCallOf({ action: 'create', userAsked: true }), /title/)
-  assert.deepEqual(
-    logWriteCallOf({ action: 'create', title: 'T', userAsked: true, project: 'p', content: 'c', nextSteps: 'n' }),
-    { tool: 'create_log', args: { title: 'T', userAsked: true, project: 'p', content: 'c', nextSteps: 'n' } },
-  )
-  // userAsked 不许被插件"顺手补上" —— 补了就等于替用户同意
-  assert.equal(logWriteCallOf({ action: 'create', title: 'T', userAsked: true }).args.userAsked, true)
-
-  // ② 日志没有终态：status 只有 running / idle，`完成`/`驳回` 在这里不存在
-  assert.deepEqual(LOG_RUNNING_STATES.slice().sort(), ['idle', 'running'])
-  for (const bad of ['完成', '驳回', '待验收', '进行中', '']) {
-    assert.throws(() => logWriteCallOf({ action: 'status', id: 'l', state: bad }), /running 或 idle/)
-  }
-
-  // ③ update 改不了 status（方寸原文："Lifecycle fields (status) are NOT here"）
-  const up = logWriteCallOf({ action: 'update', id: 'l', title: 'T', status: '完成' })
-  assert.equal(up.tool, 'update_log')
-  assert.equal('status' in up.args.fields, false, 'update 不许夹带 status')
-
-  // taskIds 空数组是**合法的清空**，不能当空串丢掉
-  assert.deepEqual(logWriteCallOf({ action: 'update', id: 'l', taskIds: [] }).args.fields, { taskIds: [] })
-  assert.throws(() => logWriteCallOf({ action: 'update', id: 'l' }), /至少/)
-  assert.throws(() => logWriteCallOf({ action: 'status', state: 'running' }), /id/)
-  assert.throws(() => logWriteCallOf({ action: 'move', id: 'l' }), /create \/ update \/ status/)
+test('⑧c 日志写口已移除：agent 不许写日志（2026-11-19 暮雨拍板）', () => {
+  // 日志是用户自己存上下文的私人笔记。此前只靠 `userAsked` 软闸拦，
+  // 但那是模型自己填的；方寸侧 update_log 当时根本没有闸；CLI 还有一条旁路。
+  // 现在工具面里**一个日志写工具都没有**。
+  const tools = buildTools({ async callTool() { return { content: [{ type: 'text', text: '[]' }] } } })
+  const names = tools.map((t) => t.name)
+  assert.equal(names.includes('fangcun_log_write'), false, '日志写工具不许回到工具面')
+  assert.equal('fangcun_log_write' in TOOL_ROUTES, false, '路由表也不许有它')
+  // 读口仍在：日志是交接记录，agent 必须能读
+  assert.ok(names.includes('fangcun_logs'))
+  assert.ok(names.includes('fangcun_log'))
 })
 
-test('⑧d 连不上时日志写工具如实报失败（不假装写进去了）', async () => {
+test('⑧d 连不上时读日志如实报失败（不假装没有日志）', async () => {
   const t = byName(buildTools({ async callTool() { throw new Error('管道已断开') } }))
-  const w = await t.fangcun_log_write.execute({ action: 'status', id: 'l', state: 'running' })
-  assert.equal(w.ok, false)
-  assert.match(w.result, /管道已断开/)
-  assert.equal(w.tool, 'set_log_status')
-  assert.match(t.fangcun_log_write.output.render({}, w)[0].text, /失败/)
 
-  // 读日志连不上同理
   const r = await t.fangcun_logs.execute({})
   assert.equal(r.connected, false)
   assert.match(t.fangcun_logs.output.render({}, r)[0].text, /不是"没有日志"/)
@@ -550,12 +541,11 @@ test('⑨b delete_task **永不进白名单**（用户 2026-11-17：「delete_ta
     assert.notEqual(v, 'delete_task', 'TOOL_ROUTES 不许转发 delete_task')
   }
   assert.equal(Object.values(WRITE_ACTIONS).includes('delete_task'), false)
-  assert.equal(Object.values(LOG_WRITE_ACTIONS).includes('delete_task'), false)
   assert.equal('delete_task' in WRITE_ACTIONS, false, '写口 action 里不许有 delete')
 
   // 运行时也必须打不出去：没有任何工具的 execute 会调它
   const routes = Object.values(TOOL_ROUTES).filter(Boolean)
-    .concat(Object.values(WRITE_ACTIONS), Object.values(LOG_WRITE_ACTIONS))
+    .concat(Object.values(WRITE_ACTIONS))
   assert.equal(routes.filter((r) => r === 'delete_task').length, 0)
   // 而且它不在任何已注册工具的返回路由集合里
   assert.equal(routes.includes(NEVER_ROUTED.values().next().value), false)
