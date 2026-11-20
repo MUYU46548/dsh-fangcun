@@ -310,17 +310,16 @@ test('⑯ parseDispatch 带出 source/nonce/sig（老派单缺省为空）', () 
   assert.equal(old.sig, '')
 })
 
-test('⑰ 冷却 / 日上限：默认 20 次/天 + 2 分钟；0 = 不限；被拒文件不占额度', () => {
+test('⑰ 冷却 / 日上限：默认不冷却、不限次数；显式设置才限；被拒文件不占额度', () => {
   const now = Date.parse('2026-11-20T12:00:00.000Z')
   assert.equal(checkDispatchLimits([], now).ok, true)
   const recent = { ok: true, at: new Date(now - 60_000).toISOString() }
-  const cool = checkDispatchLimits([recent], now)
+  // 2026-11-20 暮雨：默认不冷却 —— 刚开过也能再开
+  assert.equal(checkDispatchLimits([recent], now).ok, true)
+  const cool = checkDispatchLimits([recent], now, { cooldownMs: 2 * 60 * 1000, dailyCap: 0 })
   assert.equal(cool.ok, false)
   assert.equal(cool.reason, 'cooldown')
   assert.ok(cool.leftMs > 0 && cool.leftMs <= 2 * 60 * 1000)
-  // 11 分钟前 → 默认 2 分钟冷却早过了
-  const old = { ok: true, at: new Date(now - 11 * 60_000).toISOString() }
-  assert.equal(checkDispatchLimits([old], now).ok, true)
   const todayA = { ok: true, at: new Date(now - 30 * 60_000).toISOString() }
   const todayB = { ok: true, at: new Date(now - 20 * 60_000).toISOString() }
   const cap = checkDispatchLimits([todayA, todayB], now, { dailyCap: 2, cooldownMs: 0 })
@@ -330,7 +329,7 @@ test('⑰ 冷却 / 日上限：默认 20 次/天 + 2 分钟；0 = 不限；被�
   assert.equal(checkDispatchLimits([todayA, todayB], now, { dailyCap: 0, cooldownMs: 0 }).ok, true)
   // 被拒的行（ok:false）不占额度
   const rejects = [{ ok: false, at: new Date(now).toISOString() }, { ok: false, at: new Date(now).toISOString() }]
-  assert.equal(checkDispatchLimits(rejects, now).ok, true)
+  assert.equal(checkDispatchLimits(rejects, now, { dailyCap: 1, cooldownMs: 0 }).ok, true)
 })
 
 test('⑱ 审计落盘 + 密钥路径：显式路径 / APPDATA 回退都能找到', () => {

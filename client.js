@@ -167,7 +167,7 @@ window.__ModuleLoader__.load({
       const [settings, setSettings] = useState(null)
       const [tasks, setTasks] = useState(null)
       const [draft, setDraft] = useState({
-        dataDir: '', pipePath: '', project: '', dispatchDailyCap: '', dispatchCooldownMin: '',
+        dataDir: '', pipePath: '', project: '', dispatchDailyCap: '', dispatchCooldownMin: '', dispatchConcurrency: '',
       })
       const [widget, setWidget] = useState(readWidgetState)
       const [busy, setBusy] = useState(false)
@@ -184,6 +184,7 @@ window.__ModuleLoader__.load({
             project: body.values.project || '',
             dispatchDailyCap: body.values.dispatchDailyCap || '',
             dispatchCooldownMin: body.values.dispatchCooldownMin || '',
+            dispatchConcurrency: body.values.dispatchConcurrency || '',
           })
         }
         if (body && body.boardUrl) {
@@ -234,6 +235,7 @@ window.__ModuleLoader__.load({
             project: body.values.project || '',
             dispatchDailyCap: body.values.dispatchDailyCap || '',
             dispatchCooldownMin: body.values.dispatchCooldownMin || '',
+            dispatchConcurrency: body.values.dispatchConcurrency || '',
           })
           setNotice(body.message || '已保存')
           applySettingsBody({ ...body, boardUrl: settings && settings.boardUrl })
@@ -413,13 +415,15 @@ window.__ModuleLoader__.load({
               onClick: () => { void save({
                 dataDir: draft.dataDir, pipePath: draft.pipePath, project: draft.project,
                 dispatchDailyCap: draft.dispatchDailyCap, dispatchCooldownMin: draft.dispatchCooldownMin,
+                dispatchConcurrency: draft.dispatchConcurrency,
               }) },
             }, busy ? '保存中…' : '保存'),
             h('button', {
               style: styles.button,
               disabled: busy || !writable,
               onClick: () => { void save({
-                dataDir: '', pipePath: '', project: '', dispatchDailyCap: '', dispatchCooldownMin: '',
+                dataDir: '', pipePath: '', project: '',
+                dispatchDailyCap: '', dispatchCooldownMin: '', dispatchConcurrency: '',
               }) },
             }, '恢复默认'),
             h('button', {
@@ -439,11 +443,22 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { style: styles.row },
+            h('span', { style: styles.label }, '同时最多'),
+            h('input', {
+              style: styles.input,
+              value: draft.dispatchConcurrency,
+              placeholder: '默认 10（1–100）',
+              onChange: (e) => setField('dispatchConcurrency', e.target.value),
+            }),
+          ),
+          h(
+            'div',
+            { style: styles.row },
             h('span', { style: styles.label }, '每天最多'),
             h('input', {
               style: styles.input,
               value: draft.dispatchDailyCap,
-              placeholder: '默认 20；0 = 不限',
+              placeholder: '默认 0 = 不限',
               onChange: (e) => setField('dispatchDailyCap', e.target.value),
             }),
           ),
@@ -454,11 +469,11 @@ window.__ModuleLoader__.load({
             h('input', {
               style: styles.input,
               value: draft.dispatchCooldownMin,
-              placeholder: '默认 2；0 = 不冷却',
+              placeholder: '默认 0 = 不冷却',
               onChange: (e) => setField('dispatchCooldownMin', e.target.value),
             }),
           ),
-          h('div', { style: styles.dim }, '同一时间始终只开 1 个派单会话；改完点上面的「保存」，插件重启后生效。'),
+          h('div', { style: styles.dim }, '默认同一时间 10 个、不冷却、每日不限；改完点上面的「保存」，插件重启后生效。'),
         ),
 
         h('div', { style: styles.heading }, '挂件'),
