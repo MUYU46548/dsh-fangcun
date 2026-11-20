@@ -19,6 +19,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { signDispatch } from '../lib/dispatch.js'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf-8').replace(/\r\n/g, '\n')
@@ -253,7 +254,7 @@ test('⑧ apply：注册规则段 + 一行现状，方寸工具调用落自证�
 
     // REV-014 ②：模型工具真的注册上了（这是"挂件 vs 智能层"的分界线）
     assert.deepEqual(toolDefs.map((d) => d.name).sort(), [
-      'fangcun_card', 'fangcun_context', 'fangcun_log', 'fangcun_log_write',
+      'fangcun_card', 'fangcun_context', 'fangcun_log',
       'fangcun_logs', 'fangcun_search', 'fangcun_tasks', 'fangcun_write',
     ])
     for (const d of toolDefs) {
@@ -262,7 +263,7 @@ test('⑧ apply：注册规则段 + 一行现状，方寸工具调用落自证�
     }
     const ht = mod.collectHealth().tools
     assert.equal(ht.registered, true)
-    assert.equal(ht.names.length, 8)
+    assert.equal(ht.names.length, 7)
     assert.equal(ht.error, '')
 
     const hp = mod.collectHealth().prompt
@@ -301,9 +302,15 @@ test('⑩ 派单消费：真的投给 Agent（followup），不是往会话日�
   const prevHome = process.env.DSH_HOME
   const prevData = process.env.FANGCUN_DATA_DIR
   const prevPipe = process.env.FANGCUN_MCP_PIPE
+  const prevSecret = process.env.FC_DISPATCH_SECRET_PATH
   process.env.DSH_HOME = home
   process.env.FANGCUN_DATA_DIR = dataDir
   process.env.FANGCUN_MCP_PIPE = `\\\\.\\pipe\\dsh-fangcun-absent3-${process.pid}-${Date.now()}`
+  // 2026-11-20：派单必须有 GUI 签名；测试自己造一把临时密钥并签
+  const secret = 'a'.repeat(64)
+  const secretPath = path.join(home, 'dispatch-secret')
+  fs.writeFileSync(secretPath, secret + '\n', 'utf-8')
+  process.env.FC_DISPATCH_SECRET_PATH = secretPath
 
   const followups = []
   const appends = []
@@ -315,15 +322,25 @@ test('⑩ 派单消费：真的投给 Agent（followup），不是往会话日�
   fs.mkdirSync(dispatchDir, { recursive: true })
   fs.writeFileSync(path.join(dataDir, 'registry.yaml'),
     'projects:\n  - id: dsh-fangcun\n    repo: "E:\\\\CODE\\\\CangKu\\\\dsh-fangcun"\n', 'utf-8')
+  const body = '# 项目背景\n使命：把方寸接进 DSH。'
+  const nonce = 'b'.repeat(32)
+  const at = '2026-11-17T12:00:00.000Z'
+  const sig = signDispatch(secret, {
+    source: 'gui', project: 'dsh-fangcun', at, kind: 'plan', nonce,
+    chars: body.length, missing: [], body,
+  })
   fs.writeFileSync(path.join(dispatchDir, 'dispatch-dsh-fangcun-20261117120000.md'), [
     '<!-- fangcun-dispatch v1',
     'project: dsh-fangcun',
-    'at: 2026-11-17T12:00:00.000Z',
+    'at: ' + at,
     'kind: plan',
+    'source: gui',
+    'nonce: ' + nonce,
+    'sig: ' + sig,
+    'chars: ' + body.length,
     '-->',
     '',
-    '# 项目背景',
-    '使命：把方寸接进 DSH。',
+    body,
   ].join('\n'), 'utf-8')
 
   try {
@@ -395,6 +412,8 @@ test('⑩ 派单消费：真的投给 Agent（followup），不是往会话日�
     else process.env.FANGCUN_DATA_DIR = prevData
     if (prevPipe === undefined) delete process.env.FANGCUN_MCP_PIPE
     else process.env.FANGCUN_MCP_PIPE = prevPipe
+    if (prevSecret === undefined) delete process.env.FC_DISPATCH_SECRET_PATH
+    else process.env.FC_DISPATCH_SECRET_PATH = prevSecret
     fs.rmSync(home, { recursive: true, force: true })
   }
 })

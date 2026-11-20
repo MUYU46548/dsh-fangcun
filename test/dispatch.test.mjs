@@ -15,7 +15,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
-  consumeDispatch, dispatchDirOf, dispatchPrompt, listDispatches, parseDispatch, projectRepoOf,
+  appendDispatchAudit, checkDispatchLimits, canonicalDispatch, consumeDispatch, dispatchDirOf,
+  dispatchPrompt, listDispatches, parseDispatch, projectRepoOf, readDispatchAudit,
+  readDispatchSecret, resolveDispatchSecret, signDispatch, verifyDispatchSignature,
 } from '../lib/dispatch.js'
 
 const tmpData = () => fs.mkdtempSync(path.join(os.tmpdir(), 'fc-dispatch-'))
@@ -277,4 +279,75 @@ test('⑭ parseDispatch：可选的 cwd 字段（方寸知道就带，不知道�
 
   const noCwd = parseDispatch(['<!-- fangcun-dispatch v1', 'project: sitian', '-->', '', '正文'].join('\n'))
   assert.equal(noCwd.cwd, '', '老派单没有 cwd 行 → 空串，由插件回退到 registry 或宿主的默认目录')
+})
+
+// ── 2026-11-20 · 父卡「派单防滥用」：签名 / 限流 / 审计 ──────────────────
+test('⑮ 签名：同一口径固定向量；改一个字/换密钥都过不了', () => {
+  const secret = 'a'.repeat(64)
+  const payload = {
+    source: 'gui', project: 'sitian', at: '2026-11-20T00:00:00.000Z', kind: 'plan',
+    nonce: 'b'.repeat(32), chars: 8, missing: ['场景'], body: '正文\n第二行',
+  }
+  const sig = signDispatch(secret, payload)
+  assert.match(sig, /^[0-9a-f]{64}$/)
+  assert.equal(verifyDispatchSignature(secret, payload, sig), true)
+  assert.equal(verifyDispatchSignature(secret, { ...payload, body: '正文\n第二行x' }, sig), false, '正文被改必须失败')
+  assert.equal(verifyDispatchSignature(secret, { ...payload, project: 'other' }, sig), false, '项目被改必须失败')
+  assert.equal(verifyDispatchSignature('c'.repeat(64), payload, sig), false, '换密钥必须失败')
+  assert.ok(canonicalDispatch(payload).startsWith('gui\nsitian\n2026-11-20T00:00:00.000Z\nplan\n'))
+})
+
+test('⑯ parseDispatch 带出 source/nonce/sig（老派单缺省为空）', () => {
+  const p = parseDispatch([
+    '<!-- fangcun-dispatch v1', 'project: sitian', 'source: gui',
+    'nonce: ' + 'b'.repeat(32), 'sig: ' + 'd'.repeat(64), '-->', '', '正文',
+  ].join('\n'))
+  assert.equal(p.source, 'gui')
+  assert.equal(p.nonce, 'b'.repeat(32))
+  assert.equal(p.sig, 'd'.repeat(64))
+  const old = parseDispatch(['<!-- fangcun-dispatch v1', 'project: sitian', '-->', '', '正文'].join('\n'))
+  assert.equal(old.source, '')
+  assert.equal(old.sig, '')
+})
+
+test('⑰ 冷却 / 日上限：只数真实开过的会话，被拒文件不占额度', () => {
+  const now = Date.parse('2026-11-20T12:00:00.000Z')
+  assert.equal(checkDispatchLimits([], now).ok, true)
+  const recent = { ok: true, at: new Date(now - 60_000).toISOString() }
+  const cool = checkDispatchLimits([recent], now)
+  assert.equal(cool.ok, false)
+  assert.equal(cool.reason, 'cooldown')
+  assert.ok(cool.leftMs > 0 && cool.leftMs <= 10 * 60 * 1000)
+  // 11 分钟前 → 冷却过了；日上限 2 条今天已用 2 条 → 拒
+  const old = { ok: true, at: new Date(now - 11 * 60_000).toISOString() }
+  assert.equal(checkDispatchLimits([old], now).ok, true)
+  const todayA = { ok: true, at: new Date(now - 30 * 60_000).toISOString() }
+  const todayB = { ok: true, at: new Date(now - 20 * 60_000).toISOString() }
+  const cap = checkDispatchLimits([todayA, todayB], now)
+  assert.equal(cap.ok, false)
+  assert.equal(cap.reason, 'daily-cap')
+  // 被拒的行（ok:false）不占额度
+  const rejects = [{ ok: false, at: new Date(now).toISOString() }, { ok: false, at: new Date(now).toISOString() }]
+  assert.equal(checkDispatchLimits(rejects, now).ok, true)
+})
+
+test('⑱ 审计落盘 + 密钥路径：显式路径 / APPDATA 回退都能找到', () => {
+  const dir = tmpData()
+  assert.equal(appendDispatchAudit(dir, { ok: true, source: 'gui', project: 'sitian' }), true)
+  appendDispatchAudit(dir, { ok: false, reason: 'unsigned', source: 'agent' })
+  const rows = readDispatchAudit(dir)
+  assert.equal(rows.length, 2)
+  assert.equal(rows[0].ok, true)
+  assert.equal(rows[1].reason, 'unsigned')
+
+  const secretFile = path.join(dir, 'dispatch-secret')
+  fs.writeFileSync(secretFile, 'a'.repeat(64) + '\n', 'utf-8')
+  assert.equal(resolveDispatchSecret({ FC_DISPATCH_SECRET_PATH: secretFile }), secretFile)
+  assert.equal(readDispatchSecret(secretFile), 'a'.repeat(64))
+
+  const appdata = tmpData()
+  fs.mkdirSync(path.join(appdata, '方寸'), { recursive: true })
+  const p2 = path.join(appdata, '方寸', 'dispatch-secret')
+  fs.writeFileSync(p2, 'b'.repeat(64) + '\n', 'utf-8')
+  assert.equal(resolveDispatchSecret({ APPDATA: appdata }), p2)
 })

@@ -151,6 +151,17 @@ window.__ModuleLoader__.load({
       return '没找到'
     }
 
+    function dispatchReasonLabel(reason) {
+      if (reason === 'cooldown') return '冷却中（10 分钟内不重复）'
+      if (reason === 'daily-cap') return '今日已达上限（2 次）'
+      if (reason === 'unsigned') return '文件没有 GUI 签名（agent 手写，已拒）'
+      if (reason === 'bad-signature') return '签名不对（文件被改过，已拒）'
+      if (reason === 'no-secret') return '插件找不到方寸签名密钥'
+      if (reason === 'bad-format') return '派单格式不对'
+      if (reason === 'open-failed') return '会话没建起来'
+      return String(reason || '')
+    }
+
     function Section() {
       const [health, setHealth] = useState(null)
       const [settings, setSettings] = useState(null)
@@ -321,6 +332,18 @@ window.__ModuleLoader__.load({
               health && health.tools && health.tools.registered
                 ? (health.tools.names || []).length + ' 个已注册'
                 : '未注册'),
+          ),
+          // 2026-11-20：派单自证 —— 为什么没开会话（冷却/日上限/没签名）要看得见
+          h(
+            'div',
+            { style: styles.row },
+            h('span', { style: styles.label }, '派单'),
+            h('span', { style: styles.value },
+              health && health.dispatch
+                ? (health.dispatch.secretFound === false ? '签名密钥未找到 · ' : '')
+                  + '今日 ' + (health.dispatch.todayCount || 0) + '/' + (health.dispatch.dailyCap || 2)
+                  + (health.dispatch.lastReject ? ' · 最近拒绝：' + dispatchReasonLabel(health.dispatch.lastReject) : '')
+                : '未知'),
           ),
           link && link.hint ? h('div', { style: styles.dim }, link.hint) : null,
           boardUrl
