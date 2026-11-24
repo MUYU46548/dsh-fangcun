@@ -251,10 +251,19 @@ test('⑧ apply：注册规则段 + 一行现状，方寸工具调用落自证�
     assert.equal(sections[0].name, 'dsh-fangcun:rules')
     assert.match(sections[0].text, /开工第一件事/, '开工那一步必须点名 fangcun_context，不能含糊成"先查方寸"')
     assert.match(sections[0].text, /fangcun_context/)
-    assert.equal(contexts.length, 1, '一行现状必须注册')
-    assert.equal(contexts[0].name, 'dsh-fangcun:status')
-    assert.equal(typeof contexts[0].text, 'function', '一行现状是动态 provider')
-    assert.equal(typeof contexts[0].text(), 'string', 'provider 必须同步给字符串')
+    // ⚠ 2026-11-24 改（B6=C 自动推一屏）：context 有 2 块 —— 现状 + 记忆。
+    //   只断言 length===1 的话，"记忆块没注册"这种真回归反而会被前一条挡住看不见。
+    assert.equal(contexts.length, 2, '一行现状 + 记忆核心，两块都必须注册')
+    const cStatus = contexts.find((c) => c.name === 'dsh-fangcun:status')
+    const cMemory = contexts.find((c) => c.name === 'dsh-fangcun:memory')
+    assert.ok(cStatus, '一行现状必须注册')
+    assert.ok(cMemory, '记忆核心必须注册（否则 agent 永远看不到记忆）')
+    assert.equal(typeof cStatus.text, 'function', '一行现状是动态 provider')
+    assert.equal(typeof cStatus.text(), 'string', 'provider 必须同步给字符串')
+    assert.equal(typeof cMemory.text, 'function', '记忆也是动态 provider')
+    assert.equal(typeof cMemory.text(), 'string', 'provider 必须同步给字符串')
+    // 没连上方寸时记忆块必须是空串（不许编内容，也不许说"没有记忆"）
+    assert.equal(cMemory.text(), '', '方寸没连上时记忆块为空串，不编')
 
     // REV-014 ②：模型工具真的注册上了（这是"挂件 vs 智能层"的分界线）
     assert.deepEqual(toolDefs.map((d) => d.name).sort(), [

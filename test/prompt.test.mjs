@@ -18,7 +18,8 @@ import {
 } from '../lib/status.js'
 import { ToolProof, isFangcunTool, MAX_PROOF_ROWS, proofPaths, FANGCUN_TOOL_PREFIX } from '../lib/proof.js'
 import {
-  RULES_TEXT, RULES_SECTION_NAME, STATUS_CONTEXT_NAME, RULES_ORDER, STATUS_ORDER, registerPrompt,
+  RULES_TEXT, RULES_SECTION_NAME, STATUS_CONTEXT_NAME, MEMORY_CONTEXT_NAME,
+  RULES_ORDER, STATUS_ORDER, registerPrompt,
 } from '../lib/prompt.js'
 
 const tmpHome = () => fs.mkdtempSync(path.join(os.tmpdir(), 'fc-prompt-'))
@@ -76,26 +77,78 @@ test('① 规则段钉住四个触发点（⑦开工第一件事 / ⑧收工回�
   assert.match(RULES_TEXT, /不要手改 `task-data\/`/)
 })
 
-test('② registerPrompt：段 + context 都注册，名字/顺序/文本对得上，disposer 能撤', () => {
+test('② registerPrompt：段 + 两块 context（现状 / 记忆）都注册，名字/顺序对得上，disposer 全撤', () => {
   const calls = []
   const sp = {
     section(input) { calls.push(['section', input]); return () => calls.push(['off-section']) },
     context(input) { calls.push(['context', input]); return () => calls.push(['off-context']) },
   }
-  const dispose = registerPrompt(sp, { line: () => '全部项目 · 未完成 3 张 · 截至 18:30' })
+  // ⚠ 2026-11-24 改（问卷 B6=C：自动推一屏）：context 从 1 块变成 2 块 ——
+  //   `status`（一行现状，随卡数微动）与 `memory`（记忆核心，只在记忆真改了才动）**节奏不同**，
+  //   合在一处会让"卡数变一次 → 记忆也重发一次"。
+  const dispose = registerPrompt(sp, {
+    line: () => '全部项目 · 未完成 3 张 · 截至 18:30',
+    memoryLine: () => '- [D5] 禁止 agent 自行 kill 宿主。 → mem-1',
+  })
 
   const section = calls.find(([kind]) => kind === 'section')[1]
-  const context = calls.find(([kind]) => kind === 'context')[1]
+  const contexts = calls.filter(([kind]) => kind === 'context').map(([, v]) => v)
   assert.equal(section.name, RULES_SECTION_NAME)
   assert.equal(section.order, RULES_ORDER)
   assert.equal(section.text, RULES_TEXT, '规则段是静态文本，不掺动态数据（提示词缓存靠这个）')
 
-  assert.equal(context.name, STATUS_CONTEXT_NAME)
-  assert.equal(context.order, STATUS_ORDER)
-  assert.equal(context.text(), '全部项目 · 未完成 3 张 · 截至 18:30')
+  assert.equal(contexts.length, 2, '现状 + 记忆，两块')
+
+  const status = contexts.find((c) => c.name === STATUS_CONTEXT_NAME)
+  assert.equal(status.order, STATUS_ORDER)
+  assert.equal(status.text(), '全部项目 · 未完成 3 张 · 截至 18:30')
+
+  const memory = contexts.find((c) => c.name === MEMORY_CONTEXT_NAME)
+  assert.ok(memory, '记忆块必须注册（否则 agent 永远看不到记忆 —— 这就是「开一百次会话一次不看」）')
+  assert.equal(memory.order, STATUS_ORDER + 1, '记忆排在现状之后')
+  assert.match(memory.text(), /禁止 agent 自行 kill/, '记忆块的正文来自 memory_core')
 
   dispose()
-  assert.deepEqual(calls.slice(2), [['off-section'], ['off-context']], 'disposer 要把两个都撤掉')
+  assert.deepEqual(
+    calls.slice(3),
+    [['off-section'], ['off-context'], ['off-context']],
+    'disposer 要把三块都撤掉（漏一块就会留一条僵尸提示）',
+  )
+})
+
+test('②b 记忆块：内容必须**稳定**（不稳定会让 DSH 每分钟重发一条运行时提醒）', () => {
+  // 这不是洁癖：formatContextLine 上面那段事故说明——DSH 拿所有 section 的**原文**逐字比较，
+  // 变了就追加一条 system-reminder。方寸那行原来带分钟级时间戳，结果**每分钟一条**，
+  // 把 DSH 自己 10 分钟的时钟节流完全绕过。记忆块若带"刚刚刷新/截至 HH:MM"就是同一个病。
+  const calls = []
+  const sp = {
+    section() { return () => {} },
+    context(input) { calls.push(input); return () => {} },
+  }
+  registerPrompt(sp, {
+    line: () => '全部项目 · 未完成 3 张',
+    memoryLine: () => '- [D5] 禁止 agent 自行 kill 宿主。 → mem-1',
+  })
+  const memory = calls.find((c) => c.name === MEMORY_CONTEXT_NAME)
+  const a = memory.text()
+  // 隔开一段时间再取一次 —— 真实现里这中间会刷新 N 次
+  const b = memory.text()
+  assert.equal(a, b, '同样输入必须给同样输出')
+  assert.doesNotMatch(a, /\d{1,2}:\d{2}/, '**不许带时刻**（HH:MM 会让 DSH 每分钟判定"变了"）')
+  assert.doesNotMatch(a, /截至|刚刚|刚刚刷新/, '不许带"截至/刚刚"这类会随时间变的词')
+})
+
+test('②c 记忆块为空时不许编、不许说"没有记忆"', () => {
+  const calls = []
+  const sp = {
+    section() { return () => {} },
+    context(input) { calls.push(input); return () => {} },
+  }
+  // memoryLine 给空串（= 没连上 / 记忆关着 / core 为空）时，context 的文本必须是空串，
+  // 而不是"（没有记忆）"这种谎话 —— 空、关、读失败、没连上是四件事。
+  registerPrompt(sp, { line: () => 'x', memoryLine: () => '' })
+  const memory = calls.find((c) => c.name === MEMORY_CONTEXT_NAME)
+  assert.equal(memory.text(), '', '空就是空，不许编一句话')
 })
 
 test('③ provider 抛错不能带崩整轮提示词装配', () => {
