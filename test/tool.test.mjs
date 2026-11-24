@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 模型工具（REV-014 ②）的测试。
  *
  * 这三条是"插件是挂件还是智能层"的分界线：
@@ -69,7 +69,11 @@ test('② 只白名单转发：读只碰 list_tasks / get_task / list_logs / get
   assert.equal(TOOL_ROUTES.fangcun_write, null)
   // 2026-11-19：日志写口对 agent 关闭 —— 路由表里不该再有它
   assert.equal('fangcun_log_write' in TOOL_ROUTES, false)
-  assert.deepEqual(Object.keys(WRITE_ACTIONS).sort(), ['create', 'move', 'update'])
+  // 2026-11-24（K3 拍板 A：四个口一起补）：写口从 3 个变 7 个。
+  // 这一条**是白名单**：多出来的每一个都必须在这里点名，否则就是"悄悄开了个新写口"。
+  assert.deepEqual(Object.keys(WRITE_ACTIONS).sort(), [
+    'create', 'decision_propose', 'move', 'qn_propose', 'smap_propose', 'stage_plan_propose', 'update',
+  ])
 
   const { calls, deps } = fakeDeps({
     list_tasks: [], get_task: { id: 'c1', title: 't' }, list_logs: [], get_log: { id: 'l1', title: 't' },
@@ -719,3 +723,113 @@ test('⑦c parameters 必须是完整 JSON Schema：根上不许摊着属性名'
 })
 
 
+
+// ── 2026-11-24 · K3 拍板 A：四个"出卷 / 提议"口 ─────────────────────────
+// 问卷《方寸-决策机制三岔路》K3 的答案：「A. 现在就做，四个口一起补」。
+// 追根：2026-11-23 查实的机器真因 —— 技能卡 fangcun-bridge ①.9 早写着
+// 「有 ≥2 件要拍板 → 用 qn_propose 出卷」，而插件的工具表里**根本没这个口**
+// （实测 500 条插件日志 / 14 个会话，问卷类调用 0 次）。技能教了，工具没有。
+//
+// 这一组钉住的不是"能把参数转发出去"，而是**这四个口都只能落草稿、不能自批**：
+//   · 问卷：每题 id / ≥2 选项 / 每选项写代价 / 每题写验收线，缺一项当场抛；
+//   · 决策：**不接受 status** —— 决策只能落「待审批」，转正由用户点；
+//   · 阶段卡：三块缺一不可，判据必须带 cmd:/str:/num:/file: 前缀；
+//   · 结构地图：不碰 policies/，且 mapText 必须带 `最后核实：YYYY-MM-DD`。
+test('⑬ 四个提议口：参数校验在客户端就拦，别让模型撞墙返工', () => {
+  // 问卷：合法的能过
+  const qn = writeCallOf({
+    action: 'qn_propose',
+    title: '取舍卷',
+    questions: [{
+      id: 'S1', ask: '选哪个？', line: '选 A 后不许再出现 B 分支',
+      options: [{ k: 'A', t: '做', d: '要花两天' }, { k: 'B', t: '不做', d: '以后还得再问一次' }],
+    }],
+  })
+  assert.equal(qn.tool, 'qn_propose')
+  assert.equal(qn.args.questions[0].options.length, 2)
+
+  // 问卷：缺 id / 只一个选项 / 选项没代价 / 没验收线 —— 四种都要抛
+  const qnBase = (patch) => ({
+    action: 'qn_propose', title: 't',
+    questions: [{
+      id: 'S1', line: 'l',
+      options: [{ k: 'A', t: 'a', d: 'd' }, { k: 'B', t: 'b', d: 'd' }],
+      ...patch,
+    }],
+  })
+  assert.throws(() => writeCallOf(qnBase({ id: '' })), /缺 id/)
+  assert.throws(() => writeCallOf(qnBase({ options: [{ k: 'A', t: 'a', d: 'd' }] })), /至少要 2 个/)
+  assert.throws(() => writeCallOf(qnBase({ line: '' })), /验收线/)
+  assert.throws(
+    () => writeCallOf(qnBase({ options: [{ k: 'A', t: 'a', d: 'd' }, { k: 'B', t: 'b' }] })),
+    /代价说明/,
+  )
+  assert.throws(() => writeCallOf({ action: 'qn_propose', title: '', questions: [] }), /title/)
+
+  // 决策：**不接受 status**（自批是这套闸要防的第一件事）
+  const dec = writeCallOf({ action: 'decision_propose', content: '就这么定', source: '问卷 K1' })
+  assert.equal(dec.tool, 'decision_propose')
+  assert.equal(dec.args.status, undefined, '不许把 status 转发出去')
+  assert.throws(
+    () => writeCallOf({ action: 'decision_propose', content: 'x', source: 's', status: '有效' }),
+    /不接受 status/,
+  )
+  assert.throws(() => writeCallOf({ action: 'decision_propose', content: 'x' }), /出处/)
+
+  // 阶段卡：三块缺一 + 判据前缀
+  const spBase = {
+    action: 'stage_plan_propose', file: 'p.md', title: '一阶段',
+    approach: ['这么做'], copyRows: [['项', '来源', '原文']], criteria: ['cmd: node x.cjs'],
+  }
+  assert.equal(writeCallOf(spBase).tool, 'stage_plan_propose')
+  assert.throws(() => writeCallOf({ ...spBase, approach: [] }), /技术方案/)
+  assert.throws(() => writeCallOf({ ...spBase, copyRows: [] }), /照抄点/)
+  assert.throws(() => writeCallOf({ ...spBase, criteria: [] }), /判据/)
+  assert.throws(() => writeCallOf({ ...spBase, criteria: ['跑一下测试'] }), /cmd:/)
+
+  // 结构地图：必须带核实日期
+  const sm = writeCallOf({ action: 'smap_propose', project: 'p', mapText: '最后核实：2026-11-24\n模块…' })
+  assert.equal(sm.tool, 'smap_propose')
+  assert.throws(
+    () => writeCallOf({ action: 'smap_propose', project: 'p', mapText: '模块清单（没有日期）' }),
+    /最后核实/,
+  )
+  assert.throws(() => writeCallOf({ action: 'smap_propose', project: '', mapText: '最后核实：2026-11-24' }), /project/)
+})
+
+test('⑭ 四个提议口真的会被转发到方寸（不是写好了却没人调）', async () => {
+  const { calls, deps } = fakeDeps({
+    qn_propose: { ok: true, deck: 'd-20261124' },
+    decision_propose: { ok: true, id: 'D-170', status: '待审批' },
+    stage_plan_propose: { ok: true, stageId: 'P8' },
+    smap_propose: { ok: true, taskId: 'task-20261124-001' },
+  })
+  const t = byName(buildTools(deps))
+
+  const r1 = await t.fangcun_write.execute({
+    action: 'qn_propose', title: '一卷',
+    questions: [{ id: 'S1', line: 'l', options: [{ k: 'A', t: 'a', d: 'd' }, { k: 'B', t: 'b', d: 'd' }] }],
+  })
+  assert.equal(calls.at(-1).name, 'qn_propose', '问卷口要真的走方寸 qn_propose')
+  assert.equal(r1.ok, true)
+
+  await t.fangcun_write.execute({ action: 'decision_propose', content: 'c', source: 's' })
+  assert.equal(calls.at(-1).name, 'decision_propose')
+
+  await t.fangcun_write.execute({
+    action: 'stage_plan_propose', file: 'p.md', title: 't',
+    approach: ['a'], copyRows: [['x']], criteria: ['cmd: y'],
+  })
+  assert.equal(calls.at(-1).name, 'stage_plan_propose')
+
+  await t.fangcun_write.execute({ action: 'smap_propose', project: 'p', mapText: '最后核实：2026-11-24' })
+  assert.equal(calls.at(-1).name, 'smap_propose')
+
+  // 工具的 enum 必须把七个 action 全列出来 —— 否则模型根本不知道能这么调
+  const defs = buildTools(deps)
+  const write = (Array.isArray(defs) ? defs : Object.values(defs)).find((d) => d.name === 'fangcun_write')
+  assert.deepEqual(
+    [...write.parameters.properties.action.enum].sort(),
+    ['create', 'decision_propose', 'move', 'qn_propose', 'smap_propose', 'stage_plan_propose', 'update'],
+  )
+})

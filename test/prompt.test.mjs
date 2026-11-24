@@ -14,7 +14,7 @@ import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import {
-  BoardStatus, countOpen, formatStatusLine, CLOSED_STATUSES, STATUS_REFRESH_MS,
+  BoardStatus, countOpen, formatStatusLine, formatContextLine, CLOSED_STATUSES, STATUS_REFRESH_MS,
 } from '../lib/status.js'
 import { ToolProof, isFangcunTool, MAX_PROOF_ROWS, proofPaths, FANGCUN_TOOL_PREFIX } from '../lib/proof.js'
 import {
@@ -120,6 +120,21 @@ test('④ 一行现状的格式：全部项目 / 指定项目 / 未连接 / 未�
   assert.equal(formatStatusLine(null), '方寸 · 未连接')
 })
 
+test('④-b 给 agent 的 context 行**不带时间戳**（否则 DSH 每分钟重发一条运行时快照）', () => {
+  const a = formatContextLine({ total: 114, at: new Date(2026, 10, 3, 18, 6).getTime(), project: '' })
+  const b = formatContextLine({ total: 114, at: new Date(2026, 11, 22, 23, 59).getTime(), project: '' })
+  assert.equal(a, '全部项目 · 未完成 114 张')
+  assert.equal(a, b, '时间不同、数字相同 → 文本必须逐字相同（DSH 靠这个判定"没变"）')
+  assert.ok(!a.includes('截至'), 'agent 那份不许出现“截至”')
+  assert.equal(formatContextLine({ total: 54, at: 1, project: 'sitian' }), 'sitian · 未完成 54 张')
+  assert.equal(formatContextLine({ total: null, at: 1, error: 'ECONNREFUSED' }), '方寸 · 未连接')
+  assert.equal(formatContextLine({ total: null, at: 1, installed: false }), '方寸 · 未安装')
+  assert.equal(formatContextLine({ total: 3, at: 1, installed: false }), '方寸 · 未安装')
+  assert.equal(formatContextLine(null), '方寸 · 未连接')
+  // 给人看的那一份仍然保留时间（health 要靠它说"最后一次成功是什么时候"）
+  assert.match(formatStatusLine({ total: 114, at: 1, project: '' }), /截至 \d\d:\d\d$/)
+})
+
 test('⑤ 未完成口径：完成/驳回不算，空状态算（没填 ≠ 做完）', () => {
   assert.deepEqual([...CLOSED_STATUSES], ['完成', '驳回'])
   const tasks = [
@@ -174,6 +189,8 @@ test('⑥ BoardStatus：刷新后只读内存，数字来自 list_tasks；方寸
     assert.equal(board.line(), '方寸 · 未连接', '还没刷新时不能说 0 张')
     await board.refresh()
     assert.match(board.line(), /^全部项目 · 未完成 3 张 · 截至 \d\d:\d\d$/)
+    assert.equal(board.contextLine(), '全部项目 · 未完成 3 张',
+      '注册给 agent 的那一行不带时间戳（否则每分钟都算“快照变了”）')
     assert.equal(board.state().total, 3)
 
     // provider 只读快照：再调一百次也不碰管道
@@ -199,6 +216,7 @@ test('⑦ 一行现状按项目过滤时把项目名带上', async () => {
     const board = new BoardStatus({ pipePath, project: 'sitian', clientVersion: 'test' })
     await board.refresh()
     assert.match(board.line(), /^sitian · 未完成 2 张 · 截至 \d\d:\d\d$/)
+    assert.equal(board.contextLine(), 'sitian · 未完成 2 张')
     assert.equal(board.state().project, 'sitian')
   } finally {
     server.close()

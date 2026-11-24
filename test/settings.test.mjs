@@ -13,7 +13,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import * as mod from '../lib/index.js'
-import { dispatchLimitsOf, mergeSettings, normalizeSettings, validateSettingsPatch } from '../lib/settings.js'
+import { mergeSettings, normalizeSettings, validateSettingsPatch, SETTINGS_FIELDS } from '../lib/settings.js'
+import { readDispatchSettings } from '../lib/dispatch.js'
 
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-fangcun-settings-home-'))
 process.env.DSH_HOME = HOME
@@ -97,38 +98,45 @@ test('① 校验：只收认识的键、字符串、绝对数据根、Windows �
   assert.equal(validateSettingsPatch({ pipePath: '/tmp/x.sock' }, { platform: 'darwin' }).ok, true)
   assert.equal(validateSettingsPatch({ project: 'a\nb' }).ok, false)
   assert.equal(validateSettingsPatch({}).ok, false)
-  // 2026-11-20：派单限流是数字（0 = 不限），脏值不许写
-  assert.equal(validateSettingsPatch({ dispatchDailyCap: '20' }).ok, true)
-  assert.equal(validateSettingsPatch({ dispatchDailyCap: '0' }).ok, true)
-  assert.equal(validateSettingsPatch({ dispatchDailyCap: '1001' }).ok, false)
-  assert.equal(validateSettingsPatch({ dispatchCooldownMin: '2' }).ok, true)
-  assert.equal(validateSettingsPatch({ dispatchCooldownMin: 'abc' }).ok, false)
-  assert.equal(validateSettingsPatch({ dispatchCooldownMin: '-1' }).ok, false)
-  assert.equal(validateSettingsPatch({ dispatchConcurrency: '10' }).ok, true)
-  assert.equal(validateSettingsPatch({ dispatchConcurrency: '0' }).ok, false)
-  assert.equal(validateSettingsPatch({ dispatchConcurrency: '101' }).ok, false)
-  // 设置真的进限流：默认 0/0/10（不限次数、不冷却、同时 10 个）；0 = 不限
-  assert.deepEqual(dispatchLimitsOf({}), {
-    dailyCap: 0, cooldownMin: 0, cooldownMs: 0, concurrency: 10,
-  })
-  assert.deepEqual(
-    dispatchLimitsOf({ dispatchDailyCap: '5', dispatchCooldownMin: '1', dispatchConcurrency: '3' }),
-    { dailyCap: 5, cooldownMin: 1, cooldownMs: 60000, concurrency: 3 },
+  // 2026-11-21：派单四项不在 Loader 行里了（真源是共享 JSON 文件），
+  // 它们由 `lib/dispatch.js#validateDispatchSettingsPatch` 校验；
+  // 这里钉住"别又混回宿主设置"——混回来会出现两套默认值。
+  assert.equal(validateSettingsPatch({ dispatchDailyCap: '20' }).ok, false)
+  assert.equal(validateSettingsPatch({ dispatchEnabled: true }).ok, false)
+  assert.equal(validateSettingsPatch({ dispatchCooldownSec: '45' }).ok, false)
+
+  // 2026-11-24（暮雨第 3 条）：**派单权限档走宿主设置**（它是 Loader 行的 config，
+  // 与另外三项同源），别把它误当成派单四项写进共享 JSON —— 那会让"谁说了算"变成两套。
+  assert.equal(validateSettingsPatch({ dispatchPreset: 'standard' }).ok, true)
+  assert.equal(validateSettingsPatch({ dispatchPreset: '' }).ok, true, '留空 = 清除覆盖（跟宿主默认档）')
+  assert.equal(validateSettingsPatch({ dispatchPreset: 'a\nb' }).ok, false, '换行不许进档名')
+  assert.equal(
+    validateSettingsPatch({ dispatchPreset: 'x'.repeat(SETTINGS_FIELDS.dispatchPreset + 1) }).ok,
+    false, '超长档名直接拒（截断会悄悄改错一个档）',
   )
 })
 
 test('② 归一 / 合并：空值删掉覆盖，不把"没设置"变成显式空值', () => {
+  // 2026-11-24（暮雨第 3 条）：第 4 个字段 `dispatchPreset`（派单会话用哪个 Agent 预设档
+  // = 派单任务的默认权限）。留空 = 跟宿主默认档走。
   assert.deepEqual(normalizeSettings({ dataDir: ' C:\\a ', weird: 1 }), {
-    dataDir: 'C:\\a', pipePath: '', project: '',
-    dispatchDailyCap: '', dispatchCooldownMin: '', dispatchConcurrency: '',
+    dataDir: 'C:\\a', pipePath: '', project: '', dispatchPreset: '',
   })
   assert.deepEqual(normalizeSettings(null), {
-    dataDir: '', pipePath: '', project: '',
-    dispatchDailyCap: '', dispatchCooldownMin: '', dispatchConcurrency: '',
+    dataDir: '', pipePath: '', project: '', dispatchPreset: '',
   })
   assert.deepEqual(
     mergeSettings({ dataDir: 'C:\\a', pipePath: '\\\\.\\pipe\\x', legacy: 1 }, { dataDir: '', project: 'p' }),
     { pipePath: '\\\\.\\pipe\\x', legacy: 1, project: 'p' },
+  )
+  // 派单权限档：留空是"跟默认走"（删键），不是"设成最小档"
+  assert.deepEqual(
+    mergeSettings({ dispatchPreset: 'standard' }, { dispatchPreset: '' }),
+    {},
+  )
+  assert.deepEqual(
+    mergeSettings({}, { dispatchPreset: 'strict' }),
+    { dispatchPreset: 'strict' },
   )
 })
 
@@ -154,11 +162,11 @@ test('③ 优先级：设置 > 环境变量 > 自动探测', () => {
       dataDir: dir,
       pipePath: '\\\\.\\pipe\\dsh-fangcun-config-test',
       project: 'cfg-project',
-      dispatchDailyCap: '',
-      dispatchCooldownMin: '',
-      dispatchConcurrency: '',
+      // 2026-11-24：没设派单权限档 = 跟宿主默认走
+      dispatchPreset: '',
     })
     assert.equal(health.settings.overridden.dataDir, true)
+    assert.equal(health.settings.overridden.dispatchPreset, false)
   } finally {
     mod.default.apply(makeRoot(), {})
     fs.rmSync(dir, { recursive: true, force: true })
@@ -181,6 +189,9 @@ test('④ 设置路由：GET 说清能不能写；PUT 只收本机同源，脏�
   assert.equal(got.json.ok, true)
   assert.equal(got.json.writable, true)
   assert.equal(got.json.entryId, 'dsh-fangcun')
+  // 2026-11-21：GET 必须带上派单四项（与方寸设置页同一个真源）
+  assert.equal(typeof got.json.dispatch, 'object')
+  assert.equal(typeof got.json.dispatch.settings.enabled, 'boolean')
 
   const remoteReq = putReq({ project: 'x' })
   remoteReq.socket = { remoteAddress: '8.8.8.8' }
@@ -214,8 +225,7 @@ test('④ 设置路由：GET 说清能不能写；PUT 只收本机同源，脏�
   assert.equal(cleared.status, 200)
   assert.deepEqual(saved, { legacy: 1 }, '空字符串必须删键，不是写成空覆盖')
   assert.deepEqual(cleared.json.values, {
-    dataDir: '', pipePath: '', project: '',
-    dispatchDailyCap: '', dispatchCooldownMin: '', dispatchConcurrency: '',
+    dataDir: '', pipePath: '', project: '', dispatchPreset: '',
   })
 
   // 2026-11-19 真机：三项都空时点「保存」，profile 被重写了一遍、UI 却说"会重启一次"，
@@ -241,8 +251,7 @@ test('⑤ 没有 configEditor：GET 如实说不可写，PUT 501（不许假装�
   assert.match(put.json.error, /configEditor/)
 })
 
-test('⑥ health 的 settings 当场问宿主，不照抄 apply 时那一拍', () => {
-  // 真机踩过：configEditor 比本插件晚就绪，apply 时记成 false 之后 health 一直写 false，
+test('⑥ health 的 settings 当场问宿主，不照抄 apply 时那一拍', () => {  // 真机踩过：configEditor 比本插件晚就绪，apply 时记成 false 之后 health 一直写 false，
   // 而 GET /fangcun/api/settings 当场问却是 true —— 同一个页面两个答案。
   let editor = null
   const root = {
@@ -269,3 +278,78 @@ test('⑥ health 的 settings 当场问宿主，不照抄 apply 时那一拍', (
   assert.equal(health.settings.entryId, 'dsh-fangcun')
   assert.equal(health.settings.error, '')
 })
+
+test('⑦ 派单四项：只改它们时不需要 configEditor，写共享文件并立即生效', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-fangcun-dispatch-settings-'))
+  try {
+    // 没有 configEditor（老宿主 / 服务没起来）—— 派单设置照样应该能存：
+    // 它写的是数据根下的共享 JSON，不碰 DSH profile。
+    mod.default.apply(makeRoot({ editor: null }), { dataDir: dir })
+    const route = settingsRoute()
+
+    const r = await call(route, putReq({
+      dispatchEnabled: true, dispatchCooldownSec: '45', dispatchDailyCap: '2', dispatchConcurrency: '1',
+    }))
+    assert.equal(r.status, 200)
+    assert.equal(r.json.ok, true)
+    assert.equal(r.json.restarting, false, '派单设置不需要重启插件')
+    assert.match(r.json.message, /立即生效/)
+
+    const st = readDispatchSettings(dir)
+    assert.equal(st.settings.enabled, true)
+    assert.equal(st.settings.cooldownSec, 45)
+    assert.equal(st.settings.dailyCap, 2)
+    assert.equal(st.settings.concurrency, 1)
+
+    // GET 读的是同一份
+    const got = await call(route, getReq())
+    assert.equal(got.json.dispatch.settings.enabled, true)
+    assert.equal(got.json.dispatch.settings.cooldownSec, 45)
+
+    // 非法值：拒绝且不落盘（默认值不能被脏值顶掉）
+    const bad = await call(route, putReq({ dispatchCooldownSec: 'abc' }))
+    assert.equal(bad.status, 400)
+    assert.equal(readDispatchSettings(dir).settings.cooldownSec, 45)
+
+    // 关掉也要立即生效（不重启也能回到"出厂不发车"）
+    const off = await call(route, putReq({ dispatchEnabled: false }))
+    assert.equal(off.status, 200)
+    assert.equal(readDispatchSettings(dir).settings.enabled, false)
+  } finally {
+    mod.default.apply(makeRoot(), {})
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// ── 2026-11-24 · 暮雨第 3 条 ─────────────────────────────────────────────
+// 「方寸插件能不能增加一个设置选项，可以让用户更改派单任务的默认权限
+//  （当前默认为工作区内修改）？会不会太困难？不做在方寸内部是因为这是DSH侧设置。」
+//
+// 答案：能做，而且**不用碰 DSH 的 Agent 预设本体**
+// （暮雨原话「DSH的Agent预设太复杂，别去碰它」）——
+// 派单会话的权限就是它的 Agent 预设档（agentPreset），
+// 插件只需要决定"这一单用哪一档"。
+test('⑬ 派单权限档：用户设的那一档真的会用（不是只显示在设置页）', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-fangcun-preset-'))
+  try {
+    // 先设一个**非默认**的档，证明"用户设的"压过"宿主默认"
+    mod.default.apply(makeRoot(), { dispatchPreset: 'strict-no-write' })
+    const health = mod.collectHealth({})
+    assert.equal(health.settings.values.dispatchPreset, 'strict-no-write',
+      '设置页读回来的就是用户填的那一档')
+    assert.equal(health.settings.overridden.dispatchPreset, true)
+
+    // 清空 = 回到"跟宿主默认走"（不是"最小档"——那样是静默降权）
+    mod.default.apply(makeRoot(), {})
+    const back = mod.collectHealth({})
+    assert.equal(back.settings.values.dispatchPreset, '')
+    assert.equal(back.settings.overridden.dispatchPreset, false,
+      '留空必须是"没有覆盖"，不能被当成"显式设成空档"')
+  } finally {
+    mod.default.apply(makeRoot(), {})
+    fs.rmSync(forumSafe(dir), { recursive: true, force: true })
+  }
+})
+
+/** mkdtemp 的目录名里不会有路径分隔符，直接给回去；这里只是让上面那行读起来不吓人 */
+function forumSafe(p) { return p }

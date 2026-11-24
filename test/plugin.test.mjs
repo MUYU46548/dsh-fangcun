@@ -20,6 +20,10 @@ import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { signDispatch } from '../lib/dispatch.js'
+import {
+  checkDispatchGate, dispatchSettingsPathOf, normalizeDispatchSettings,
+  readDispatchSettings, writeDispatchSettings,
+} from '../lib/dispatch.js'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const read = (rel) => fs.readFileSync(path.join(ROOT, rel), 'utf-8').replace(/\r\n/g, '\n')
@@ -317,9 +321,14 @@ test('⑩ 派单消费：真的投给 Agent（followup），不是往会话日�
   const renamed = []
   const flushed = []
   const created = []
+  const mounted = []
   // 造一份派单，落在插件会去读的目录
   const dispatchDir = path.join(dataDir, '.dispatch-dsh')
   fs.mkdirSync(dispatchDir, { recursive: true })
+  // 2026-11-21：派单总闸默认关。这条测试验的是"消费链路"，所以显式打开
+  // （关着时的拒收由下面 ⑩b 单独钉）。
+  fs.writeFileSync(path.join(dispatchDir, 'dispatch-settings.json'),
+    JSON.stringify({ enabled: true, cooldownSec: 0, dailyCap: 0, concurrency: 1 }, null, 2), 'utf-8')
   fs.writeFileSync(path.join(dataDir, 'registry.yaml'),
     'projects:\n  - id: dsh-fangcun\n    repo: "E:\\\\CODE\\\\CangKu\\\\dsh-fangcun"\n', 'utf-8')
   const body = '# 项目背景\n使命：把方寸接进 DSH。'
@@ -354,6 +363,9 @@ test('⑩ 派单消费：真的投给 Agent（followup），不是往会话日�
             return {
               async create(opts) {
                 created.push(opts)
+                // 宿主在发布 Agent 之前会 await `setup(agentCtx)`（见 CreateAgentOptions.setup）。
+                // 这里照做，否则"只记账不装配"的 bug 照样能绿。
+                if (typeof opts.setup === 'function') await opts.setup({ stub: 'agentCtx' })
                 const session = {
                   header: { cwd: opts && opts.meta && opts.meta.cwd },
                   append: (type, data, o) => appends.push({ type, data, o }),
@@ -374,6 +386,14 @@ test('⑩ 派单消费：真的投给 Agent（followup），不是往会话日�
           if (name === 'sessions') return { flush: async (s) => { flushed.push(s); return true } }
           if (name === 'agentDefaultModel') {
             return { currentSelection: () => ({ provider: 'deepseek', model: 'deepseek-v4.1', reasoningEffort: 'medium' }) }
+          }
+          // 2026-11-21（卡 ee53ff26）：派单会话必须带上宿主默认 agentPreset，
+          // 否则落到最小档（没有文件/终端）。真实宿主服务名是 agentPresets。
+          if (name === 'agentPresets') {
+            return {
+              resolve: async () => ({ id: 'standard' }),
+              mount: async (agentCtx, id) => { mounted.push({ agentCtx, id }); return { id } },
+            }
           }
           return undefined
         },
@@ -400,6 +420,20 @@ test('⑩ 派单消费：真的投给 Agent（followup），不是往会话日�
     assert.deepEqual(created[0].agentOptions, {
       provider: 'deepseek', model: 'deepseek-v4.1', reasoningEffort: 'medium',
     }, '必须把宿主默认模型带过去，否则新会话不会思考')
+    // 2026-11-21（卡 ee53ff26）：手开会话头里有 agentPreset=standard，派单会话以前没有。
+    // 不传 = 落到最小工具档（只有插件工具，没有文件/终端）—— 派出去也改不了代码。
+    assert.equal(created[0].meta.agentPreset, 'standard',
+      '派单会话必须带宿主默认 agentPreset，否则只有最小工具档')
+    // 2026-11-21 复测真机：会话头里**已经有** agentPreset=standard，可派单会话照样
+    // 只有插件工具、没有文件/终端。原因是 meta 只记账、不装配；把该档插件挂到
+    // agent 作用域上的是 create 的 `setup` 回调（宿主 session.create 同写法）。
+    // 所以这里钉的是"真的 mount 了"，不是"meta 里有那行"。
+    assert.equal(typeof created[0].setup, 'function',
+      '必须把 preset 的 setup 传进 agents.create —— 只写 meta 等于档案写着 standard、跑的是空壳')
+    assert.deepEqual(mounted.map((m) => m.id), ['standard'],
+      'setup 里必须真调 agentPresets.mount，否则文件/终端工具根本不会挂到 agent 上')
+    assert.equal(mounted[0].agentCtx && mounted[0].agentCtx.stub, 'agentCtx',
+      'mount 必须挂在宿主给的 agentCtx 上，不能挂到插件自己的 ctx')
     // 落目录：派单文件没写 cwd 时回退到 registry.yaml 的 repo
     // （插件不实现 YAML 反转义：`"E:\\CODE\\…"` 原样取出，Windows 认重复分隔符，
     //   所以这里按分隔符归一后比 —— 别为了一个断言去写半截 YAML 解析器）
@@ -415,6 +449,126 @@ test('⑩ 派单消费：真的投给 Agent（followup），不是往会话日�
     if (prevSecret === undefined) delete process.env.FC_DISPATCH_SECRET_PATH
     else process.env.FC_DISPATCH_SECRET_PATH = prevSecret
     fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('⑩b 默认关：手写派单（含签过名的）也整目录拒收，不建任何会话', async () => {
+  // 2026-11-21 暮雨定案：「不做上限，做出厂不发车」。
+  // 没打开 `dispatch-settings.json` 之前，插件必须**整目录拒收**：
+  // 手写文件、别的 agent 写、旧残留被重建，一样开不出会话。
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-fangcun-dispatch-off-'))
+  const dataDir = path.join(home, 'fangcun')
+  const prevHome = process.env.DSH_HOME
+  const prevData = process.env.FANGCUN_DATA_DIR
+  const prevPipe = process.env.FANGCUN_MCP_PIPE
+  const prevSecret = process.env.FC_DISPATCH_SECRET_PATH
+  process.env.DSH_HOME = home
+  process.env.FANGCUN_DATA_DIR = dataDir
+  process.env.FANGCUN_MCP_PIPE = `\\\\.\\pipe\\dsh-fangcun-absent-off-${process.pid}-${Date.now()}`
+  const secret = 'a'.repeat(64)
+  const secretPath = path.join(home, 'dispatch-secret')
+  fs.writeFileSync(secretPath, secret + '\n', 'utf-8')
+  process.env.FC_DISPATCH_SECRET_PATH = secretPath
+
+  const dispatchDir = path.join(dataDir, '.dispatch-dsh')
+  fs.mkdirSync(dispatchDir, { recursive: true })
+  // ① 手写、无签名
+  fs.writeFileSync(path.join(dispatchDir, 'dispatch-evil-20261121120000.md'), [
+    '<!-- fangcun-dispatch v1', 'project: evil', '-->', '', '手写正文',
+  ].join('\n'), 'utf-8')
+  // ② 连"看起来合法"的签名派单也一样拒（默认关先于验签）
+  const body = '# 正文'
+  const nonce = 'b'.repeat(32)
+  const at = '2026-11-21T12:00:00.000Z'
+  const sig = signDispatch(secret, {
+    source: 'gui', project: 'dsh-fangcun', at, kind: 'work', nonce,
+    chars: body.length, missing: [], body,
+  })
+  fs.writeFileSync(path.join(dispatchDir, 'dispatch-dsh-fangcun-20261121120001.md'), [
+    '<!-- fangcun-dispatch v1', 'project: dsh-fangcun', 'at: ' + at, 'kind: work',
+    'source: gui', 'nonce: ' + nonce, 'sig: ' + sig, 'chars: ' + body.length, '-->', '', body,
+  ].join('\n'), 'utf-8')
+
+  const created = []
+  try {
+    mod.default.apply({
+      on() { return () => {} },
+      effect(fn) { fn() },
+      inject(_l, cb) { cb({ webServer: { register: () => () => {} }, effect: (fn) => { fn() } }) },
+      get(name) {
+        if (name === 'agents') {
+          return { async create(opts) { created.push(opts); throw new Error('默认关时不该建会话') } }
+        }
+        return undefined
+      },
+    })
+    await new Promise((r) => setTimeout(r, 800))
+
+    assert.equal(created.length, 0, '默认关：agent 一次都不许被创建')
+    const left = fs.readdirSync(dispatchDir).filter((n) => /^dispatch-.*\.md$/.test(n))
+    assert.deepEqual(left, [], '主目录必须一份不剩（整目录拒收，不是延迟消费）')
+    const rejected = fs.readdirSync(path.join(dispatchDir, 'rejected'))
+    assert.equal(rejected.length, 2, '两份都进 rejected/ 留证据')
+    const audit = fs.readFileSync(path.join(dispatchDir, 'audit.jsonl'), 'utf-8')
+    const rows = audit.split(/\r?\n/).filter(Boolean).map((l) => JSON.parse(l))
+    assert.equal(rows.filter((r) => r.reason === 'disabled').length, 2, '每份都留一行 reason=disabled')
+    assert.ok(rows.every((r) => r.ok === false), '拒收不能记成成功')
+  } finally {
+    if (prevHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = prevHome
+    if (prevData === undefined) delete process.env.FANGCUN_DATA_DIR
+    else process.env.FANGCUN_DATA_DIR = prevData
+    if (prevPipe === undefined) delete process.env.FANGCUN_MCP_PIPE
+    else process.env.FANGCUN_MCP_PIPE = prevPipe
+    if (prevSecret === undefined) delete process.env.FC_DISPATCH_SECRET_PATH
+    else process.env.FC_DISPATCH_SECRET_PATH = prevSecret
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('⑪ 派单总闸：默认关、共用设置文件、判据与方寸同一口径', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fc-dispatch-gate-'))
+  try {
+    // 没有设置文件 → 默认关
+    const st = readDispatchSettings(dir)
+    assert.equal(st.exists, false)
+    assert.equal(st.settings.enabled, false, '出厂默认必须关（没打开就开不出会话）')
+    assert.deepEqual(st.settings, { enabled: false, cooldownSec: 30, dailyCap: 3, concurrency: 1 })
+    // 垃圾 / 半截输入一律按关；`"true"` 不算 true
+    assert.equal(normalizeDispatchSettings({ enabled: 'true' }).enabled, false)
+    assert.equal(normalizeDispatchSettings({ enabled: 1 }).enabled, false)
+
+    // 写四项 → 读回一致（与方寸同一个文件名）
+    const w = writeDispatchSettings(dir, { enabled: true, cooldownSec: 10, dailyCap: 1, concurrency: 1 })
+    assert.equal(w.ok, true)
+    assert.equal(fs.existsSync(dispatchSettingsPathOf(dir)), true)
+    assert.equal(readDispatchSettings(dir).settings.enabled, true)
+    // 非法 patch 不落盘
+    assert.equal(writeDispatchSettings(dir, { enabled: 'yes' }).ok, false)
+    assert.equal(writeDispatchSettings(dir, { cooldownSec: -1 }).ok, false)
+
+    const now = Date.now()
+    const rows = [{ at: new Date(now).toISOString(), ok: true, project: 'p1' }]
+    const settings = readDispatchSettings(dir).settings
+    const disabled = checkDispatchGate({ project: 'p1', settings: { ...settings, enabled: false }, rows, now })
+    assert.equal(disabled.reason, 'disabled')
+    const cool = checkDispatchGate({ project: 'p1', settings: { ...settings, dailyCap: 0 }, rows, now })
+    assert.equal(cool.reason, 'cooldown', '同项目冷却（与方寸写侧同一套）')
+    assert.ok(cool.leftMs > 0)
+    const other = checkDispatchGate({ project: 'p2', settings: { ...settings, dailyCap: 0 }, rows, now })
+    assert.equal(other.ok, true, '冷却不连坐别的项目')
+    const cap = checkDispatchGate({ project: 'p2', settings, rows, now })
+    assert.equal(cap.reason, 'daily-cap', '日上限按全局算')
+    assert.equal(cap.today, 1)
+    const busy = checkDispatchGate({ project: 'p1', settings: { ...settings, cooldownSec: 0, dailyCap: 0 }, rows: [], now, inFlight: 1 })
+    assert.equal(busy.reason, 'concurrency')
+    // 本地日：26 小时前的成功不算今天
+    const old = new Date(now - 26 * 3600 * 1000).toISOString()
+    const onlyOld = checkDispatchGate({ project: 'p1', settings: { ...settings, cooldownSec: 0 }, rows: [{ at: old, ok: true, project: 'p1' }], now })
+    assert.equal(onlyOld.ok, true)
+    assert.equal(onlyOld.today, 0)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
   }
 })
 
@@ -464,4 +618,23 @@ test('⑪ 路由名单两处同步：smoke-packed 的旧名单不许漂移（CI 
   const need = mod.ROUTES.map((r) => r.path).sort()
   assert.deepEqual(listed, need,
     'smoke-packed.mjs 的路由名单与 ROUTES 漂移了（这条只有 CI 会红，所以必须在这里先红）')
+})
+
+// ── ⑫ 在途计数只数派单会话，不数 DSH 会话树/子代理（2026-11-21 · 卡 2bd6106a B）──
+//
+// 暮雨问：「同时在途是否会意外限制子代理导致任务失败损耗高额费用？」
+// 设计口径：`inFlight` 是**派单文件行名**的集合，只被派单消费循环 add/delete；
+// 会话内起的子代理没有派单文件，也不经过 `checkDispatch`，结构上进不了这个计数。
+// 这条守的是"口径不被改坏"（谁要是改成监听 session/created 数会话，这里当场红）。
+test('⑫ 在途计数按派单文件行，不按 DSH 会话树（子代理结构上不受限）', () => {
+  const src = read('lib/index.js')
+  assert.match(src, /inFlight\.has\(row\.name\)/,
+    '在途集合必须按派单文件名判重 —— 那是"方寸开出的单"，不是 DSH 会话')
+  assert.match(src, /inFlight\.add\(row\.name\)/,
+    '只有派单消费循环能加在途；会话内子代理没有派单文件，进不来')
+  assert.ok(!/session\/created|agent\/created|subagent|agents\.list\(/.test(src),
+    '插件不许监听 DSH 会话树来数在途（那才会误伤子代理）')
+  const createCalls = src.match(/await agents\.create\(\{/g) || []
+  assert.equal(createCalls.length, 1,
+    '只允许 openSession 一处建会话；多一处就是绕过派单闸/计数的第二条路')
 })

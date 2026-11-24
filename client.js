@@ -152,12 +152,14 @@ window.__ModuleLoader__.load({
     }
 
     function dispatchReasonLabel(reason) {
-      if (reason === 'cooldown') return '冷却中（10 分钟内不重复）'
-      if (reason === 'daily-cap') return '今日已达上限（2 次）'
+      if (reason === 'disabled') return '派单总闸未启用（默认关）'
+      if (reason === 'cooldown') return '冷却中'
+      if (reason === 'daily-cap') return '今日已达上限'
       if (reason === 'unsigned') return '文件没有 GUI 签名（agent 手写，已拒）'
       if (reason === 'bad-signature') return '签名不对（文件被改过，已拒）'
       if (reason === 'no-secret') return '插件找不到方寸签名密钥'
       if (reason === 'bad-format') return '派单格式不对'
+      if (reason === 'concurrency') return '在途会话已满'
       if (reason === 'open-failed') return '会话没建起来'
       return String(reason || '')
     }
@@ -167,7 +169,9 @@ window.__ModuleLoader__.load({
       const [settings, setSettings] = useState(null)
       const [tasks, setTasks] = useState(null)
       const [draft, setDraft] = useState({
-        dataDir: '', pipePath: '', project: '', dispatchDailyCap: '', dispatchCooldownMin: '', dispatchConcurrency: '',
+        dataDir: '', pipePath: '', project: '',
+        dispatchPreset: '',
+        dispatchEnabled: false, dispatchCooldownSec: '', dispatchDailyCap: '', dispatchConcurrency: '',
       })
       const [widget, setWidget] = useState(readWidgetState)
       const [busy, setBusy] = useState(false)
@@ -178,13 +182,18 @@ window.__ModuleLoader__.load({
       const applySettingsBody = (body) => {
         setSettings(body)
         if (body && body.values && !dirty.current) {
+          const d = body.dispatch && body.dispatch.settings ? body.dispatch.settings : null
           setDraft({
             dataDir: body.values.dataDir || '',
             pipePath: body.values.pipePath || '',
             project: body.values.project || '',
-            dispatchDailyCap: body.values.dispatchDailyCap || '',
-            dispatchCooldownMin: body.values.dispatchCooldownMin || '',
-            dispatchConcurrency: body.values.dispatchConcurrency || '',
+            // 2026-11-24（暮雨第 3 条）：派单会话的权限档
+            dispatchPreset: (body.dispatchPreset && body.dispatchPreset.configured) || '',
+            // 派单四项的真身在 body.dispatch（与方寸设置页同一个文件）
+            dispatchEnabled: d ? d.enabled === true : false,
+            dispatchCooldownSec: d ? String(d.cooldownSec === undefined ? '' : d.cooldownSec) : '',
+            dispatchDailyCap: d ? String(d.dailyCap === undefined ? '' : d.dailyCap) : '',
+            dispatchConcurrency: d ? String(d.concurrency === undefined ? '' : d.concurrency) : '',
           })
         }
         if (body && body.boardUrl) {
@@ -229,13 +238,16 @@ window.__ModuleLoader__.load({
         try {
           const body = await putSettings(patch)
           dirty.current = false
+          const d = body.dispatch && body.dispatch.settings ? body.dispatch.settings : null
           setDraft({
             dataDir: body.values.dataDir || '',
             pipePath: body.values.pipePath || '',
             project: body.values.project || '',
-            dispatchDailyCap: body.values.dispatchDailyCap || '',
-            dispatchCooldownMin: body.values.dispatchCooldownMin || '',
-            dispatchConcurrency: body.values.dispatchConcurrency || '',
+            dispatchPreset: (body.dispatchPreset && body.dispatchPreset.configured) || '',
+            dispatchEnabled: d ? d.enabled === true : false,
+            dispatchCooldownSec: d ? String(d.cooldownSec === undefined ? '' : d.cooldownSec) : '',
+            dispatchDailyCap: d ? String(d.dailyCap === undefined ? '' : d.dailyCap) : '',
+            dispatchConcurrency: d ? String(d.concurrency === undefined ? '' : d.concurrency) : '',
           })
           setNotice(body.message || '已保存')
           applySettingsBody({ ...body, boardUrl: settings && settings.boardUrl })
@@ -348,8 +360,9 @@ window.__ModuleLoader__.load({
             h('span', { style: styles.label }, '派单'),
             h('span', { style: styles.value },
               health && health.dispatch
-                ? (health.dispatch.secretFound === false ? '签名密钥未找到 · ' : '')
-                  + '今日 ' + (health.dispatch.todayCount || 0) + '/' + (health.dispatch.dailyCap || 2)
+                ? (health.dispatch.settings && health.dispatch.settings.enabled === false ? '未启用 · ' : '')
+                  + '今日 ' + (health.dispatch.todayCount || 0) + '/'
+                  + (Number(health.dispatch.dailyCap) > 0 ? health.dispatch.dailyCap : '不限')
                   + (health.dispatch.lastReject ? ' · 最近拒绝：' + dispatchReasonLabel(health.dispatch.lastReject) : '')
                 : '未知'),
           ),
@@ -403,6 +416,26 @@ window.__ModuleLoader__.load({
               onChange: (e) => setField('project', e.target.value),
             }),
           ),
+          // 2026-11-24（暮雨第 3 条）：「能不能增加一个设置选项，可以让用户更改
+          // 派单任务的默认权限（当前默认为工作区内修改）？」
+          //
+          // 能 —— 权限档就是 Agent 预设档（agentPreset）。所以这里让用户填档名，
+          // 而不是去改 DSH 的 Agent 预设本体（暮雨：「DSH的Agent预设太复杂，别去碰它」）。
+          h(
+            'div',
+            { style: styles.row },
+            h('span', { style: styles.label }, '派单权限'),
+            h('input', {
+              style: styles.input,
+              value: draft.dispatchPreset,
+              placeholder: '留空 = 跟 DSH 当前默认档（推荐）',
+              onChange: (e) => setField('dispatchPreset', e.target.value),
+            }),
+          ),
+          h('div', { style: styles.dim },
+            '派单会话用哪个 Agent 预设档 —— 这决定它挂哪些工具（含文件/终端写权限）。'
+            + '留空 = 跟 DSH 当前默认档一致；填了就用那一档。'
+            + '⚠ DSH 的 Agent 预设本体不会被改动，这里只决定"派单开出来的会话用哪一档"。'),
           h('div', { style: styles.dim }, writable
             ? '保存后写进 DSH profile，插件会重启一次让新配置生效。'
             : (settings && settings.error) || '设置不可写（宿主没有 configEditor 服务）。'),
@@ -414,8 +447,9 @@ window.__ModuleLoader__.load({
               disabled: busy || !writable,
               onClick: () => { void save({
                 dataDir: draft.dataDir, pipePath: draft.pipePath, project: draft.project,
-                dispatchDailyCap: draft.dispatchDailyCap, dispatchCooldownMin: draft.dispatchCooldownMin,
-                dispatchConcurrency: draft.dispatchConcurrency,
+                dispatchPreset: draft.dispatchPreset,
+                dispatchEnabled: draft.dispatchEnabled, dispatchCooldownSec: draft.dispatchCooldownSec,
+                dispatchDailyCap: draft.dispatchDailyCap, dispatchConcurrency: draft.dispatchConcurrency,
               }) },
             }, busy ? '保存中…' : '保存'),
             h('button', {
@@ -423,7 +457,9 @@ window.__ModuleLoader__.load({
               disabled: busy || !writable,
               onClick: () => { void save({
                 dataDir: '', pipePath: '', project: '',
-                dispatchDailyCap: '', dispatchCooldownMin: '', dispatchConcurrency: '',
+                // 派单四项「恢复默认」= 出厂值（关 / 30 秒 / 3 / 1）
+                dispatchEnabled: false, dispatchCooldownSec: '30',
+                dispatchDailyCap: '3', dispatchConcurrency: '1',
               }) },
             }, '恢复默认'),
             h('button', {
@@ -436,19 +472,29 @@ window.__ModuleLoader__.load({
           error ? h('div', { style: styles.error }, error) : null,
         ),
 
-        h('div', { style: styles.heading }, '派单限流'),
+        h('div', { style: styles.heading }, '派单'),
         h(
           'div',
           { style: styles.card },
           h(
             'div',
             { style: styles.row },
-            h('span', { style: styles.label }, '同时最多'),
+            h('span', { style: styles.label }, '启用派单'),
+            h('input', {
+              type: 'checkbox',
+              checked: draft.dispatchEnabled,
+              onChange: (e) => setField('dispatchEnabled', !!e.target.checked),
+            }),
+          ),
+          h(
+            'div',
+            { style: styles.row },
+            h('span', { style: styles.label }, '冷却（秒）'),
             h('input', {
               style: styles.input,
-              value: draft.dispatchConcurrency,
-              placeholder: '默认 10（1–100）',
-              onChange: (e) => setField('dispatchConcurrency', e.target.value),
+              value: draft.dispatchCooldownSec,
+              placeholder: '默认 30（0 = 不冷却）',
+              onChange: (e) => setField('dispatchCooldownSec', e.target.value),
             }),
           ),
           h(
@@ -458,22 +504,24 @@ window.__ModuleLoader__.load({
             h('input', {
               style: styles.input,
               value: draft.dispatchDailyCap,
-              placeholder: '默认 0 = 不限',
+              placeholder: '默认 3（0 = 不限）',
               onChange: (e) => setField('dispatchDailyCap', e.target.value),
             }),
           ),
           h(
             'div',
             { style: styles.row },
-            h('span', { style: styles.label }, '冷却（分钟）'),
+            h('span', { style: styles.label }, '同时最多'),
             h('input', {
               style: styles.input,
-              value: draft.dispatchCooldownMin,
-              placeholder: '默认 0 = 不冷却',
-              onChange: (e) => setField('dispatchCooldownMin', e.target.value),
+              value: draft.dispatchConcurrency,
+              placeholder: '默认 1（1–100）',
+              onChange: (e) => setField('dispatchConcurrency', e.target.value),
             }),
           ),
-          h('div', { style: styles.dim }, '默认同一时间 10 个、不冷却、每日不限；改完点上面的「保存」，插件重启后生效。'),
+          h('div', { style: styles.dim },
+            '默认关闭：没打开之前，插件拒绝消费任何派单（手写文件也一样）。'
+            + '这四项与方寸「设置 → 通用 → DSH 派单」是同一个文件，改完立即生效，不需要重启插件。'),
         ),
 
         h('div', { style: styles.heading }, '挂件'),
