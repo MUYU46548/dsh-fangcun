@@ -268,7 +268,9 @@ test('⑧ apply：注册规则段 + 一行现状，方寸工具调用落自证�
     // REV-014 ②：模型工具真的注册上了（这是"挂件 vs 智能层"的分界线）
     assert.deepEqual(toolDefs.map((d) => d.name).sort(), [
       'fangcun_card', 'fangcun_context', 'fangcun_log',
-      'fangcun_logs', 'fangcun_search', 'fangcun_tasks', 'fangcun_write',
+      'fangcun_logs', 'fangcun_memory_briefing', 'fangcun_memory_core',
+      'fangcun_memory_read', 'fangcun_memory_search', 'fangcun_memory_write', 'fangcun_search',
+      'fangcun_tasks', 'fangcun_write',
     ])
     for (const d of toolDefs) {
       assert.ok(d.output && d.output.schema, d.name + ' 缺 output.schema')
@@ -276,7 +278,7 @@ test('⑧ apply：注册规则段 + 一行现状，方寸工具调用落自证�
     }
     const ht = mod.collectHealth().tools
     assert.equal(ht.registered, true)
-    assert.equal(ht.names.length, 7)
+    assert.equal(ht.names.length, 12)
     assert.equal(ht.error, '')
 
     const hp = mod.collectHealth().prompt

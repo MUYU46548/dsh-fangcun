@@ -1,5 +1,22 @@
 # 变更记录
 
+## 0.7.9（2026-11-25）· 记忆 5 口：把「教了没给」接上
+
+> 用户 2026-11-25 问卷 S1=B / E1=A（P16.1）。病根：`lib/prompt.js` 从 0.7.1 起就教模型
+> 「动手前先 `memory_search`」，而插件工具面 7 个里 `memory_*` **0 个** —— 教了没给，模型只能空转。
+
+- **新增 5 个工具**：`fangcun_memory_search` / `fangcun_memory_read` / `fangcun_memory_core` /
+  `fangcun_memory_briefing` / `fangcun_memory_write`。全部白名单转发方寸 MCP 的 `memory_*`，
+  不重写检索/打分/审批逻辑。
+- **提示语换名**：方寸 MCP 回包里的 `memory_read` 这类**MCP 工具名**，插件侧换成
+  `fangcun_memory_read` —— 不许再出现「提示让用、工具面里没有」（P16.1 的病根本身）。
+- **`memory_read` 是纯文本**：`toolResultToJson` 会把它吞成 `{ok:false,error:"前200字"}`，
+  新增 `toolResultText` 分流；证据原文不再被当坏 JSON。
+- **写口永远只说「已落待审批」**：审批在记忆页，插件不替谁批；模型不能自批自收。
+- 输出有界：search / briefing 只给 claim 行（≤4000 字）；read ≤8000 字且明说截断。
+- 测试 170 → 185 全绿；真管道探针（`\\.\pipe\tegula-mcp`）实测 search / core / briefing
+  三处都连上，且提示语已换成插件工具名。
+
 ## 0.7.8（2026-11-24）· 四个提议口 + 派单权限可配
 
 > 对应方寸 `6dc0dc1`（0.7.9）、2026-11-23 问卷《方寸-决策机制三岔路》的 K1 / K3。

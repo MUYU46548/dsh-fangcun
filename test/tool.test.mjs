@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 模型工具（REV-014 ②）的测试。
  *
  * 这三条是"插件是挂件还是智能层"的分界线：
@@ -35,14 +35,16 @@ function fakeDeps(resultByTool = {}) {
 
 const byName = (tools) => Object.fromEntries(tools.map((t) => [t.name, t]))
 
-test('① 造出三个真工具，定义字段齐全', () => {
+test('① 造出真工具，定义字段齐全', () => {
   const { deps } = fakeDeps()
   const tools = buildTools(deps)
-  assert.equal(tools.length, 7)
+  assert.equal(tools.length, 12)
   const t = byName(tools)
   assert.deepEqual(Object.keys(t).sort(), [
     'fangcun_card', 'fangcun_context', 'fangcun_log',
-    'fangcun_logs', 'fangcun_search', 'fangcun_tasks', 'fangcun_write',
+    'fangcun_logs', 'fangcun_memory_briefing', 'fangcun_memory_core',
+    'fangcun_memory_read', 'fangcun_memory_search', 'fangcun_memory_write', 'fangcun_search',
+    'fangcun_tasks', 'fangcun_write',
   ])
 
   for (const def of tools) {
@@ -67,6 +69,12 @@ test('② 只白名单转发：读只碰 list_tasks / get_task / list_logs / get
   assert.equal(TOOL_ROUTES.fangcun_logs, 'list_logs')
   assert.equal(TOOL_ROUTES.fangcun_log, 'get_log')
   assert.equal(TOOL_ROUTES.fangcun_write, null)
+  // 记忆 5 口（2026-11-25 · P16.1）：提示词点名了它们，工具面就必须真有
+  assert.equal(TOOL_ROUTES.fangcun_memory_search, 'memory_search')
+  assert.equal(TOOL_ROUTES.fangcun_memory_read, 'memory_read')
+  assert.equal(TOOL_ROUTES.fangcun_memory_core, 'memory_core')
+  assert.equal(TOOL_ROUTES.fangcun_memory_briefing, 'memory_briefing')
+  assert.equal(TOOL_ROUTES.fangcun_memory_write, 'memory_write')
   // 2026-11-19：日志写口对 agent 关闭 —— 路由表里不该再有它
   assert.equal('fangcun_log_write' in TOOL_ROUTES, false)
   // 2026-11-24（K3 拍板 A：四个口一起补）：写口从 3 个变 7 个。
@@ -102,6 +110,64 @@ test('② 只白名单转发：读只碰 list_tasks / get_task / list_logs / get
   await assert.rejects(() => t.fangcun_write.execute({ action: 'get_data_dir' }))
   // 日志写工具已不在工具面（2026-11-19）—— 模型连"调用它"的机会都不该有
   assert.equal(t.fangcun_log_write, undefined)
+})
+
+test('②b 记忆 5 口：转发到方寸 MCP memory_*；没连上如实说、写口只说待审批', async () => {
+  const { calls, deps } = fakeDeps({
+    memory_search: {
+      ok: true, total: 1, returned: 1, truncated: false,
+      hint: '要原文/证据用 memory_read({file})；默认 memory_search 不返回待审批。',
+      next: '要原文用 fangcun_memory_read',
+      items: [{ id: 'mem-20261124-06', type: '教训', project: '跨项目', claim: 'BOM 分场景', score: 0.5 }],
+    },
+    memory_read: () => ({ content: [{ type: 'text', text: '## 证据\n逐字原文' }] }),
+    memory_core: {
+      ok: true, enabled: true, subEnabled: true, text: '核心正文', chars: 4,
+      budget: 800, pinnedCount: 1, hint: '',
+    },
+    memory_briefing: {
+      ok: true, project: 'p', total: 1, returned: 1, reviewOverdue: 0,
+      items: [{ id: 'mem-1', type: '纪律', claim: '一句话' }], hint: '',
+    },
+    memory_write: {
+      ok: true, id: 'mem-9', file: 'memory/claims/mem-9.md', status: '待审批', hint: '等用户点通过',
+    },
+  })
+  const t = byName(buildTools(deps))
+
+  const s = await t.fangcun_memory_search.execute({ q: 'BOM', limit: 5 })
+  assert.equal(calls[0].name, 'memory_search')
+  assert.deepEqual(calls[0].args, { q: 'BOM', limit: 5 })
+  assert.match(s.text, /mem-20261124-06/)
+  assert.match(s.text, /BOM 分场景/)
+  // 方寸 MCP 的提示语写的是 MCP 工具名（memory_read），插件里必须换成真实工具名
+  assert.match(s.text, /fangcun_memory_read/)
+  assert.doesNotMatch(s.text, /(?<!fangcun_)memory_(read|search)/)
+
+  // memory_read 回的是**纯文本**，不是 JSON —— 解析成 JSON 会把证据吞成 error
+  const r = await t.fangcun_memory_read.execute({ file: 'memory/claims/mem-20261124-06.md' })
+  assert.equal(calls[1].name, 'memory_read')
+  assert.match(r.text, /逐字原文/)
+
+  const c = await t.fangcun_memory_core.execute({})
+  assert.equal(calls[2].name, 'memory_core')
+  assert.match(c.text, /核心正文/)
+
+  const b = await t.fangcun_memory_briefing.execute({ project: 'p' })
+  assert.equal(calls[3].name, 'memory_briefing')
+  assert.match(b.text, /一句话/)
+
+  const w = await t.fangcun_memory_write.execute({ type: '教训', claim: 'x', evidence: 'y', source: 'z' })
+  assert.equal(calls[4].name, 'memory_write')
+  assert.deepEqual(calls[4].args, { type: '教训', claim: 'x', evidence: 'y', source: 'z' })
+  assert.match(w.text, /待审批/)
+
+  // 方寸没连上：必须说"读不到"（不许说成"没有记忆"）
+  const off = byName(buildTools({ async callTool() { throw new Error('EPIPE') } }))
+  const down = await off.fangcun_memory_search.execute({ q: 'x' })
+  assert.equal(down.connected, false)
+  assert.match(down.text, /未连接/)
+  assert.match(down.text, /不是"没有记忆"/)
 })
 
 test('③ writeCallOf：参数不全就抛，绝不猜；只放模型真给了的字段', () => {
