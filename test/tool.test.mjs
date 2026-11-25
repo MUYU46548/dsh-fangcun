@@ -182,6 +182,39 @@ test('②b 记忆 5 口：转发到方寸 MCP memory_*；没连上如实说、�
   assert.match(down.text, /不是"没有记忆"/)
 })
 
+test('②c search 自动带 file 作用域（P16.3 自动绑定）', async () => {
+  // 用户拍板的机制：模型读/写/改过哪个文件，检索就自动带哪个文件的 `file:` 作用域，
+  // 不让它自己记得传。身份来自 `exec.agent.id`（DSH Agent 的公开 id 就是 SessionId）。
+  const seen = []
+  const tools = byName(buildTools({
+    async callTool(name, args) {
+      seen.push({ name, args })
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({ ok: true, total: 0, returned: 0, items: [], hint: '' }),
+        }],
+      }
+    },
+    activeScopes: (id) => (id === 's1' ? ['file:E:/hot.ts'] : []),
+  }))
+
+  await tools.fangcun_memory_search.execute({ q: 'x' }, { agent: { id: 's1' } })
+  assert.deepEqual(seen[0], { name: 'memory_search', args: { q: 'x', scopes: ['file:E:/hot.ts'] } })
+
+  // 显式给了 scopes = 它知道自己在筛什么 → 不覆盖
+  await tools.fangcun_memory_search.execute({ q: 'x', scopes: ['topic:t'] }, { agent: { id: 's1' } })
+  assert.deepEqual(seen[1].args, { q: 'x', scopes: ['topic:t'] })
+
+  // 别的会话：不带
+  await tools.fangcun_memory_search.execute({ q: 'x' }, { agent: { id: 's2' } })
+  assert.deepEqual(seen[2].args, { q: 'x' })
+
+  // 老宿主没有 exec：不带，也不许抛
+  await tools.fangcun_memory_search.execute({ q: 'x' })
+  assert.deepEqual(seen[3].args, { q: 'x' })
+})
+
 test('③ writeCallOf：参数不全就抛，绝不猜；只放模型真给了的字段', () => {
   // create 必须有 title
   assert.throws(() => writeCallOf({ action: 'create' }), /title/)
