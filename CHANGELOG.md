@@ -20,6 +20,33 @@
   留空 = 跟宿主当前默认档走（推荐，也是出厂行为）；填了就用那一档。
   优先级：设置页显式指定 > 宿主默认档 > 不传。
 
+### 0.7.8 补丁（2026-11-25）· 派单退化成空手的根因 + 「算了却不显示」
+
+> 暮雨 2026-11-24：「A 居然还没修好，我快吐了。」
+
+- **真 bug：派单会静默退化成"只有插件工具"**（容器 `948feaa9`）。两个都读了宿主
+  `@deepseek-ai/dsh-agent-preset-registry` 的实现才查出来：
+  - ① 用**空串**调 `presets.resolve(wanted)`，而宿主是 `id ?? this.defaultId` ——
+    `'' ?? x` 等于 `''`，于是 `Unknown agent preset:` 异常被外层 `catch` 静默吞掉，
+    `agentPreset` 留空 → 不传 `meta.agentPreset`、不传 `setup` → 空手；
+  - ② `list()` 的返回项**根本没有 `isDefault` 字段**，`find(x => x.isDefault) || rows[0]`
+    永远退化成 `rows[0]`，而 rows 按 order 排，第一个不是默认档。
+  - 修法按权威程度来：`defaultId` → `resolve()` 不带参 → `list()` 只认 `isDefault === true`，
+    查不到就**不猜**。抽成纯函数 `resolveDispatchPreset()` 便于真跑断言。
+- **每次派单成功落一行 `dispatch-capability`**（`audit.jsonl`），写明本单实际挂到哪个档；
+  解析不到时 `presetResolved: false` 并说明「只有插件工具」，**不冒充成功**。
+- **界面补上「工具档」那一行**（2026-11-25）：`presetResolved` 早就写进 health 了，
+  但 `client.js` **一次都没渲染过** —— 界面上「派单成功」和「派单成功但空手」长得一模一样。
+  现在三种状态分开说：挂上了哪一档 / ⚠ 这单没有文件/终端工具 / 老插件不猜。
+- **治理「判据不可复跑」这个病本身**（本轮顺手抓到的）：
+  - `npm test` 点名了 16 个文件（此前只点 14 个，`dispatch-preset` / `dispatch-capability`
+    **压根没跑**，而卡上写着"全量 182/0"）；现在全量 **184/0**。
+  - `test/layering.test.mjs` 新增守卫 ⑥：扫 `test/*.test.mjs`，任何文件没被 `npm test`
+    点名就红（反例：抹掉那两个 → 精确红并指名道姓）。
+  - `test/client.test.mjs` 新增 ⑤：真调用 `presetLabel`，钉住"空手必须明说"。
+    ⚠ 这一条的第一版**是假绿**：它只匹配到三元条件那一处，把渲染值换成写死的
+    `'派单成功'` 照样绿 —— 反例自证当场抓出，已改成钉 `styles.value` 后面那个位置。
+
 ## 0.7.7（2026-11-22）· 运行时上下文不再每分钟重发
 
 - **agent 那一行不带时间戳**：`systemPrompt.context` 原来是

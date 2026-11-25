@@ -133,3 +133,40 @@ test('⑤ 零依赖：package.json 没有任何 dependencies', () => {
   assert.equal(pkg.dependencies, undefined, '插件必须零依赖（硬边界）')
   assert.equal(pkg.peerDependencies, undefined, '也不许有 peerDependencies —— 那会绑死宿主包版本')
 })
+
+/**
+ * ⑥ `npm test` 必须点名**每一个** `test/*.test.mjs`。
+ *
+ * ## 这条为什么必须存在（不是洁癖）
+ *
+ * 2026-11-24 卡 `948feaa9` 正文写着「插件全量测试 **182 / 0**」。
+ * 但 `npm test` 的脚本里只有 14 个文件、实际跑出来是 **170** —— 差的 12 条
+ * 就是 `dispatch-preset`（7）与 `dispatch-capability`（5）这两个新文件，
+ * 它们**压根没进 npm test**，只有在人工点名时才跑过。
+ *
+ * 于是「全量绿」和「我手工跑过那两个文件」被写成了同一句话。
+ * 这正是这张卡自己要治的病：**判据不可复跑，卡就会撒谎**。
+ * 谁下次再加一个测试文件忘了登记，这条当场红 —— 而不是等 20 个会话后靠人发现。
+ */
+test('⑥ npm test 点名了每一个 test/*.test.mjs（新的测试文件不许漏登记）', () => {
+  const root = path.join(here, '..')
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf-8'))
+  const cmd = String((pkg.scripts && pkg.scripts.test) || '')
+  assert.ok(cmd.includes('--test'), 'npm test 必须走 node --test')
+
+  const listed = new Set(
+    (cmd.match(/test\/[\w.-]+\.mjs/g) || []).map((p) => path.basename(p)),
+  )
+  const onDisk = fs.readdirSync(path.join(root, 'test'))
+    .filter((f) => f.endsWith('.test.mjs'))
+    .sort()
+  const missing = onDisk.filter((f) => !listed.has(f))
+
+  assert.deepEqual(
+    missing, [],
+    '这些测试文件没被 npm test 点名（`npm test` 不会跑它们，但卡上会写已跑过）：' + missing.join(', '),
+  )
+  // 反向也钉：点了名却不存在 = 脚本里挂着死路径
+  const ghost = [...listed].filter((f) => !onDisk.includes(f)).sort()
+  assert.deepEqual(ghost, [], 'npm test 点了不存在的文件：' + ghost.join(', '))
+})

@@ -164,6 +164,29 @@ window.__ModuleLoader__.load({
       return String(reason || '')
     }
 
+    /**
+     * 「上一单实际挂到哪个工具档」的人话（2026-11-25）。
+     *
+     * 为什么必须显示：`presetResolved` 从 2026-11-24 起就写进 health 了，
+     * 但界面一次都没渲染过它 —— 于是"派单成功"在界面上看起来永远一模一样，
+     * 而那一单可能只有插件工具、连 read/write/pwsh 都没有。
+     * 卡 `948feaa9` 正文点名要治的就是这个：「界面永远显示派单成功」。
+     *
+     * 三种状态分开说，**不合并、不美化**：
+     *   · true  → 说清挂到了哪一档（note 里有 agentPreset=xxx 与来源）
+     *   · false → **明说这单没有文件/终端工具**，别让用户以为能干活
+     *   · 没这个字段（老插件 / 还没派过单）→ 返回空串，不猜
+     */
+    function presetLabel(dispatch) {
+      if (!dispatch) return ''
+      const note = String(dispatch.presetNote || '')
+      if (dispatch.presetResolved === true) return note || '已挂上默认工具档'
+      if (dispatch.presetResolved === false) {
+        return (note ? note + ' —— ' : '') + '⚠ 这一单没有文件/终端工具，只会拿到插件工具'
+      }
+      return ''
+    }
+
     function Section() {
       const [health, setHealth] = useState(null)
       const [settings, setSettings] = useState(null)
@@ -366,6 +389,16 @@ window.__ModuleLoader__.load({
                   + (health.dispatch.lastReject ? ' · 最近拒绝：' + dispatchReasonLabel(health.dispatch.lastReject) : '')
                 : '未知'),
           ),
+          // 2026-11-25：**这一单实际挂到哪个工具档** —— 没有这一行，
+          // 界面上「派单成功」和「派单成功但空手」长得一模一样。空串 = 不渲染整行（宁缺勿滥）。
+          presetLabel(health && health.dispatch)
+            ? h(
+              'div',
+              { style: styles.row },
+              h('span', { style: styles.label }, '工具档'),
+              h('span', { style: styles.value }, presetLabel(health.dispatch)),
+            )
+            : null,
           link && link.hint ? h('div', { style: styles.dim }, link.hint) : null,
           boardUrl
             ? h(
@@ -587,6 +620,10 @@ window.__ModuleLoader__.load({
       })
     }
 
-    return { inject: ['slots'], apply }
+    // `presetLabel` 与 `dispatchReasonLabel` 一起导出，纯粹是为了**能被真跑断言**：
+    // 它们决定「这一单到底能不能干活」这句话怎么给人看，
+    // 而之前 `presetResolved` 写进 health 却零渲染，正是"写了没接线"。
+    // 导出不影响 `inject/apply` 契约（宿主只读这两个键）。
+    return { inject: ['slots'], apply, presetLabel, dispatchReasonLabel }
   },
 })

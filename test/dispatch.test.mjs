@@ -19,6 +19,7 @@ import {
   dispatchPrompt, listDispatches, parseDispatch, projectRepoOf, readDispatchAudit,
   readDispatchSecret, resolveDispatchSecret, signDispatch, verifyDispatchSignature,
 } from '../lib/dispatch.js'
+import { resolveDispatchPreset } from '../lib/index.js'
 
 const tmpData = () => fs.mkdtempSync(path.join(os.tmpdir(), 'fc-dispatch-'))
 
