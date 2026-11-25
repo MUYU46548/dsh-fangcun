@@ -269,7 +269,7 @@ test('⑧ apply：注册规则段 + 一行现状，方寸工具调用落自证�
     assert.deepEqual(toolDefs.map((d) => d.name).sort(), [
       'fangcun_card', 'fangcun_context', 'fangcun_log',
       'fangcun_logs', 'fangcun_memory_briefing', 'fangcun_memory_core',
-      'fangcun_memory_read', 'fangcun_memory_search', 'fangcun_memory_write', 'fangcun_search',
+      'fangcun_memory_organize', 'fangcun_memory_read', 'fangcun_memory_search', 'fangcun_memory_write', 'fangcun_search',
       'fangcun_tasks', 'fangcun_write',
     ])
     for (const d of toolDefs) {
@@ -278,7 +278,7 @@ test('⑧ apply：注册规则段 + 一行现状，方寸工具调用落自证�
     }
     const ht = mod.collectHealth().tools
     assert.equal(ht.registered, true)
-    assert.equal(ht.names.length, 12)
+    assert.equal(ht.names.length, 13)
     assert.equal(ht.error, '')
 
     const hp = mod.collectHealth().prompt

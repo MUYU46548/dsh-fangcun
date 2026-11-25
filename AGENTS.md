@@ -156,8 +156,8 @@ electron-updater 目录 / 开始菜单与桌面快捷方式 / Program Files 与 
 `context()` 放**一行现状**（`lib/status.js` 的内存快照，60 秒后台刷新；provider **绝不碰管道**）。
 
 **模型工具**（REV-014 ②，0.4.0 起；`fangcun_context` 0.5.0 起；日志三件套 0.6.6；
-`fangcun_search` 0.6.7；context 带固定记忆核心 0.7.2；记忆 5 口 0.7.9）：`apply()` 里 `root.get('tools')`（同样是 `get` 不是 `inject`，理由见事实 11）
-→ `register()` **十二个**定义（`lib/tool.js`）→ 模型调到就开一条管道连接、用完即关。
+`fangcun_search` 0.6.7；context 带固定记忆核心 0.7.2；记忆 6 口 0.7.10）：`apply()` 里 `root.get('tools')`（同样是 `get` 不是 `inject`，理由见事实 11）
+→ `register()` **十三个**定义（`lib/tool.js`）→ 模型调到就开一条管道连接、用完即关。
 （2026-11-19 起 `fangcun_log_write` 已移除 —— 日志写口对 agent 关闭，见事实 57b。）
 
 | 工具 | 转发 | 说明 |
@@ -173,6 +173,7 @@ electron-updater 目录 / 开始菜单与桌面快捷方式 / Program Files 与 
 | `fangcun_memory_read` | `memory_read` | 读一条原文/证据（只读；`anchor` 只取一节，找不到就报错） |
 | `fangcun_memory_core` | `memory_core` | 固定记忆核心（只读；开关关着也报"库里还有几条"） |
 | `fangcun_memory_briefing` | `memory_briefing` | 按项目开工简报（只读；带待复核标记） |
+| `fangcun_memory_organize` | `memory_organize` | 拿记忆整理包（只读；日志 + 已完成/驳回卡候选，≤24 条；不调模型不写盘） |
 | `fangcun_memory_write` | `memory_write` | 写一条记忆，**永远落待审批**（不能自批；审批在记忆页） |
 
 `delete_task` **永不做**（`NEVER_ROUTED` + `tool ⑨b` 钉着）—— 事实 51。

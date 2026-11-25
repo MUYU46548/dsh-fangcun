@@ -38,12 +38,12 @@ const byName = (tools) => Object.fromEntries(tools.map((t) => [t.name, t]))
 test('① 造出真工具，定义字段齐全', () => {
   const { deps } = fakeDeps()
   const tools = buildTools(deps)
-  assert.equal(tools.length, 12)
+  assert.equal(tools.length, 13)
   const t = byName(tools)
   assert.deepEqual(Object.keys(t).sort(), [
     'fangcun_card', 'fangcun_context', 'fangcun_log',
     'fangcun_logs', 'fangcun_memory_briefing', 'fangcun_memory_core',
-    'fangcun_memory_read', 'fangcun_memory_search', 'fangcun_memory_write', 'fangcun_search',
+    'fangcun_memory_organize', 'fangcun_memory_read', 'fangcun_memory_search', 'fangcun_memory_write', 'fangcun_search',
     'fangcun_tasks', 'fangcun_write',
   ])
 
@@ -129,6 +129,11 @@ test('②b 记忆 5 口：转发到方寸 MCP memory_*；没连上如实说、�
       ok: true, project: 'p', total: 1, returned: 1, reviewOverdue: 0,
       items: [{ id: 'mem-1', type: '纪律', claim: '一句话' }], hint: '',
     },
+    memory_organize: {
+      ok: true, mode: 'handoff', count: 2,
+      prompt: '你是 DSH 里的方寸记忆整理助手。\n[source: log-1] 项目: p 标题: 一件活',
+      sources: [{ id: 'log-1', project: 'p', title: '一件活' }],
+    },
     memory_write: {
       ok: true, id: 'mem-9', file: 'memory/claims/mem-9.md', status: '待审批', hint: '等用户点通过',
     },
@@ -157,9 +162,16 @@ test('②b 记忆 5 口：转发到方寸 MCP memory_*；没连上如实说、�
   assert.equal(calls[3].name, 'memory_briefing')
   assert.match(b.text, /一句话/)
 
+  // 整理包（P16.2）：只读、给候选来源，不写任何东西
+  const o = await t.fangcun_memory_organize.execute({ project: 'p', limit: 5 })
+  assert.equal(calls[4].name, 'memory_organize')
+  assert.deepEqual(calls[4].args, { project: 'p', limit: 5 })
+  assert.match(o.text, /整理包/)
+  assert.match(o.text, /source: log-1/)
+
   const w = await t.fangcun_memory_write.execute({ type: '教训', claim: 'x', evidence: 'y', source: 'z' })
-  assert.equal(calls[4].name, 'memory_write')
-  assert.deepEqual(calls[4].args, { type: '教训', claim: 'x', evidence: 'y', source: 'z' })
+  assert.equal(calls[5].name, 'memory_write')
+  assert.deepEqual(calls[5].args, { type: '教训', claim: 'x', evidence: 'y', source: 'z' })
   assert.match(w.text, /待审批/)
 
   // 方寸没连上：必须说"读不到"（不许说成"没有记忆"）

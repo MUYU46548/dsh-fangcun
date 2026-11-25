@@ -77,6 +77,23 @@ test('① 规则段钉住四个触发点（⑦开工第一件事 / ⑧收工回�
   assert.match(RULES_TEXT, /不要手改 `task-data\/`/)
 })
 
+test('①b 记忆规则：工具名真实存在、写口只说待审批、收尾自检有整理包入口', () => {
+  // 2026-11-25（P16.1/P16.2）：提示词点名的记忆工具必须和工具面一致 ——
+  // 0.7.8 的病根就是「教了 memory_search、工具面没有」，模型只能空转。
+  for (const name of [
+    'fangcun_memory_search',
+    'fangcun_memory_read',
+    'fangcun_memory_write',
+    'fangcun_memory_organize',
+  ]) {
+    assert.match(RULES_TEXT, new RegExp(name), '提示词必须点名 ' + name)
+  }
+  assert.match(RULES_TEXT, /待审批/, '写口必须说清永远落待审批')
+  assert.match(RULES_TEXT, /不能自批/, '要显式禁止自批')
+  assert.match(RULES_TEXT, /收尾自检/, '要有收尾自检（会话结束前的自动提案规则）')
+  assert.doesNotMatch(RULES_TEXT, /(?<!fangcun_)memory_(search|read|write|organize)/, '不许出现裸的 MCP 名')
+})
+
 test('② registerPrompt：段 + 两块 context（现状 / 记忆）都注册，名字/顺序对得上，disposer 全撤', () => {
   const calls = []
   const sp = {
